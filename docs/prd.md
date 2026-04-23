@@ -13,7 +13,7 @@ The inference gateway will provide a stable API layer for AI inference requests,
 ## Milestone 1 Scope
 
 - Repository structure for gateway, worker, contracts, docs, infrastructure, tests, and dashboards.
-- TypeScript gateway with a health endpoint and placeholder chat completions route.
+- TypeScript gateway with a health endpoint and an authenticated chat completions route.
 - Python eval worker placeholder entrypoint.
 - Environment configuration and structured logs.
 - Minimal automated tests.
@@ -31,6 +31,8 @@ The inference gateway will provide a stable API layer for AI inference requests,
 ## Acceptance Criteria
 
 - The gateway returns `200` from `GET /health`.
-- `POST /v1/chat/completions` validates basic request shape and returns a clear not-implemented response.
+- `POST /v1/chat/completions` requires an API key, validates a normalized request shape, and calls a provider through an adapter interface.
+- The mock provider returns a stable response shape for local development.
+- The real-provider adapter remains a stub and does not call an external API in Milestone 1.
 - Gateway lint, typecheck, and tests run through pnpm scripts.
 - Eval worker tests run with Python unittest.

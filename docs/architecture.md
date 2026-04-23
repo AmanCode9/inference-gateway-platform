@@ -15,7 +15,24 @@ The gateway is a strict TypeScript Node service using the built-in HTTP server. 
 - `GET /health`
 - `POST /v1/chat/completions`
 
-The chat completions endpoint is intentionally a placeholder in Milestone 1. It performs basic input validation and returns `501 Not Implemented`.
+The gateway establishes a request context per call, including:
+
+- request ID generation or propagation through `x-request-id`
+- structured request-scoped logging
+- centralized JSON error responses
+
+The chat completions endpoint performs:
+
+- API key authentication through `x-api-key`
+- JSON request validation for a normalized chat payload
+- provider invocation through an adapter interface
+
+Milestone 1 includes:
+
+- a mock provider adapter for local development and integration tests
+- a real-provider adapter stub selected through environment configuration
+
+The real-provider adapter is intentionally non-functional in Milestone 1 and returns a clear not-implemented error rather than making outbound API calls.
 
 ## Worker
 
