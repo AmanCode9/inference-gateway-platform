@@ -1,0 +1,45 @@
+asyncapi: 3.0.0
+info:
+  title: Inference Gateway Usage Events
+  version: 0.1.0
+  description: Contract placeholder for future usage events. No runtime Kafka logic exists in Milestone 1.
+channels:
+  usageEvents:
+    address: usage.events
+    messages:
+      UsageEvent:
+        $ref: "#/components/messages/UsageEvent"
+operations: {}
+components:
+  messages:
+    UsageEvent:
+      name: UsageEvent
+      title: Usage Event
+      payload:
+        $ref: "#/components/schemas/UsageEvent"
+  schemas:
+    UsageEvent:
+      type: object
+      required:
+        - eventId
+        - occurredAt
+        - requestId
+        - route
+      properties:
+        eventId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+        route:
+          type: string
+        model:
+          type: string
+        inputTokens:
+          type: integer
+          minimum: 0
+        outputTokens:
+          type: integer
+          minimum: 0

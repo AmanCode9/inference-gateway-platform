@@ -1,0 +1,14 @@
+{
+  "name": "inference-gateway-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production-style distributed AI inference gateway scaffold.",
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "lint": "pnpm --filter @igp/gateway lint",
+    "typecheck": "pnpm --filter @igp/gateway typecheck",
+    "test:gateway": "pnpm --filter @igp/gateway test",
+    "test:eval-worker": "python -m unittest discover -s workers/eval-worker/tests -t workers/eval-worker",
+    "test": "pnpm run test:gateway && pnpm run test:eval-worker"
+  }
+}

@@ -1,0 +1,13 @@
+[project]
+name = "igp-eval-worker"
+version = "0.1.0"
+description = "Milestone 1 eval worker placeholder for the inference gateway platform."
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.scripts]
+igp-eval-worker = "app.main:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
