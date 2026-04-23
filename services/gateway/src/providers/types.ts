@@ -4,6 +4,7 @@ import type { Logger } from "../logging/logger.js";
 export interface ProviderContext {
   readonly requestId: string;
   readonly logger: Logger;
+  readonly signal: AbortSignal;
 }
 
 export interface ChatProvider {

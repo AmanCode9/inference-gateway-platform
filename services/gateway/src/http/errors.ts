@@ -46,3 +46,11 @@ export function notFound(message = "Route not found."): HttpError {
 export function notImplemented(message: string, code = "not_implemented"): HttpError {
   return new HttpError(501, code, message);
 }
+
+export function serviceUnavailable(message: string, code = "service_unavailable"): HttpError {
+  return new HttpError(503, code, message);
+}
+
+export function gatewayTimeout(message: string, code = "gateway_timeout"): HttpError {
+  return new HttpError(504, code, message);
+}

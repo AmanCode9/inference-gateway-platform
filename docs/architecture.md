@@ -1,6 +1,6 @@
 # Architecture
 
-## Milestone 1 Components
+## Milestone 2 Components
 
 - TypeScript gateway: owns the public HTTP surface and process-level concerns such as config, logging, and health.
 - Python eval worker: placeholder process for future evaluation work.
@@ -27,12 +27,26 @@ The chat completions endpoint performs:
 - JSON request validation for a normalized chat payload
 - provider invocation through an adapter interface
 
-Milestone 1 includes:
+Milestone 2 adds a deterministic execution layer beneath the route:
 
-- a mock provider adapter for local development and integration tests
-- a real-provider adapter stub selected through environment configuration
+- provider registry built from environment-configured provider definitions
+- primary provider selection with optional secondary fallback
+- request-level timeout budget for provider execution
+- bounded retries with backoff for retryable provider failures
+- lightweight in-memory metrics for provider selection, success, failure, retry, fallback, and timeout events
 
-The real-provider adapter is intentionally non-functional in Milestone 1 and returns a clear not-implemented error rather than making outbound API calls.
+Provider routing remains intentionally simple:
+
+- primary provider is selected from config
+- optional secondary provider is selected from config
+- no dynamic policy routing, eval-based routing, or cost-based routing is present
+
+Provider adapters available in Milestone 2:
+
+- mock provider for local development and failure simulation in tests
+- real-provider stub selected through environment configuration
+
+The real-provider adapter is intentionally non-functional in Milestone 2 and returns a clear not-implemented error rather than making outbound API calls.
 
 ## Worker
 

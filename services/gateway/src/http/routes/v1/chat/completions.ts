@@ -25,26 +25,26 @@ export async function handleChatCompletions(
 
   context.logger.info("chat_completion_requested", {
     model: chatRequest.model,
-    messageCount: chatRequest.messages.length,
-    provider: context.provider.name
+    messageCount: chatRequest.messages.length
   });
 
-  const providerResponse = await context.provider.createChatCompletion(chatRequest, {
+  const executionResult = await context.chatCompletionService.createChatCompletion(chatRequest, {
     requestId: context.requestId,
     logger: context.logger.child({
-      component: "provider",
-      provider: context.provider.name
+      component: "provider_execution"
     })
   });
 
   context.logger.info("chat_completion_succeeded", {
-    model: providerResponse.model,
-    provider: providerResponse.provider,
-    choiceCount: providerResponse.choices.length
+    model: executionResult.completion.model,
+    provider: executionResult.metadata.provider,
+    choiceCount: executionResult.completion.choices.length,
+    fallbackUsed: executionResult.metadata.fallbackUsed,
+    retryCount: executionResult.metadata.retryCount
   });
 
   sendJson(response, 200, {
-    ...providerResponse,
+    ...executionResult.completion,
     requestId: context.requestId
   } satisfies ChatCompletionResponse);
 }

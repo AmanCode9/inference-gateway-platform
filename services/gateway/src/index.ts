@@ -1,7 +1,9 @@
+import { createChatCompletionService } from "./chat/service.js";
 import { createApp, startServer } from "./app.js";
 import { loadConfig } from "./config/index.js";
 import { createLogger } from "./logging/logger.js";
-import { createProvider } from "./providers/create-provider.js";
+import { createProviderMetrics } from "./metrics/provider-metrics.js";
+import { createProviderRegistry } from "./providers/registry.js";
 
 void bootstrap().catch((error: unknown) => {
   console.error(
@@ -19,8 +21,14 @@ void bootstrap().catch((error: unknown) => {
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger(config);
-  const provider = createProvider(config);
-  const server = createApp({ config, logger, provider });
+  const metrics = createProviderMetrics();
+  const providerRegistry = createProviderRegistry(config.providerRegistry);
+  const chatCompletionService = createChatCompletionService({
+    metrics,
+    providerRegistry,
+    routing: config.routing
+  });
+  const server = createApp({ config, logger, chatCompletionService });
 
   await startServer(server, config, logger);
 

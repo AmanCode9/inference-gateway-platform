@@ -1,6 +1,6 @@
 # Inference Gateway Platform
 
-Production-style scaffold for a distributed AI inference gateway. Milestone 1 keeps the system intentionally small: a TypeScript gateway, a Python eval worker skeleton, API and event contracts, documentation, and local infrastructure scaffolding.
+Production-style scaffold for a distributed AI inference gateway. Milestone 2 adds deterministic provider routing, retry and timeout handling, fallback to a secondary provider, and lightweight in-memory metrics while keeping the gateway small and production-oriented.
 
 ## Repository Structure
 
@@ -32,7 +32,8 @@ Run the gateway locally:
 
 ```sh
 $env:GATEWAY_API_KEY="local-dev-gateway-key"
-$env:PROVIDER_KIND="mock"
+$env:PRIMARY_PROVIDER_KIND="mock"
+$env:PRIMARY_PROVIDER_ID="mock"
 pnpm --filter @igp/gateway dev
 ```
 
@@ -47,6 +48,12 @@ The chat completions route expects:
 - `Content-Type: application/json`
 - a normalized payload with `model` and `messages`
 
+Routing is environment-configured:
+
+- `PRIMARY_PROVIDER_KIND` and `PRIMARY_PROVIDER_ID` select the primary adapter
+- `SECONDARY_PROVIDER_KIND` and `SECONDARY_PROVIDER_ID` optionally enable deterministic fallback
+- `PROVIDER_TIMEOUT_MS`, `PROVIDER_MAX_RETRIES`, and `PROVIDER_RETRY_BACKOFF_MS` control the execution budget
+
 Example request:
 
 ```sh
@@ -56,16 +63,29 @@ curl -X POST http://localhost:3000/v1/chat/completions ^
   -d "{\"model\":\"mock-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
 ```
 
-To exercise the real-provider adapter stub instead of the mock adapter:
+To exercise the real-provider adapter stub as the primary provider:
 
 ```sh
-$env:PROVIDER_KIND="real_stub"
+$env:PRIMARY_PROVIDER_KIND="real_stub"
+$env:PRIMARY_PROVIDER_ID="openai-stub"
 $env:REAL_PROVIDER_NAME="openai"
 $env:REAL_PROVIDER_BASE_URL="https://api.openai.com/v1"
 pnpm --filter @igp/gateway dev
 ```
 
-The stub adapter is configuration-only in Milestone 1 and does not make outbound API calls.
+To enable fallback from a retryable mock primary to a secondary mock provider:
+
+```sh
+$env:PRIMARY_PROVIDER_KIND="mock"
+$env:PRIMARY_PROVIDER_ID="mock-primary"
+$env:PRIMARY_MOCK_BEHAVIOR="retryable_failure"
+$env:SECONDARY_PROVIDER_KIND="mock"
+$env:SECONDARY_PROVIDER_ID="mock-secondary"
+$env:SECONDARY_MOCK_BEHAVIOR="success"
+pnpm --filter @igp/gateway dev
+```
+
+The real-provider adapter remains a stub in Milestone 2 and does not make outbound API calls.
 
 Run the Python worker placeholder:
 
@@ -89,13 +109,18 @@ pnpm run test
 
 The root `test` script runs gateway tests and the eval worker unit tests.
 
-## Milestone 1 Boundaries
+## Milestone 2 Boundaries
 
 Included:
 
 - Repository scaffold
 - Gateway health endpoint
 - Versioned `/v1/chat/completions` route with API key auth, validation, and adapter-based provider calls
+- Provider registry with deterministic primary and optional secondary routing
+- Request-level provider timeout budgets
+- Config-driven retries with backoff for retryable provider failures
+- Config-driven fallback to a secondary provider
+- Lightweight in-memory provider metrics
 - Environment-based config loading
 - Structured JSON logging
 - Request ID propagation and structured error responses
@@ -110,4 +135,6 @@ Not included yet:
 - Kafka event pipeline or runtime producer/consumer logic
 - Kubernetes manifests
 - Eval-backed routing
-- Multi-provider production routing
+- Dynamic model or cost-based routing
+- Streaming responses
+- Live external provider integration

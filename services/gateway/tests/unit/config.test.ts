@@ -12,8 +12,19 @@ describe("loadConfig", () => {
       serviceVersion: "0.1.0",
       logLevel: "info",
       maxRequestBytes: 1_048_576,
-      apiKey: "test-key",
-      providerKind: "mock"
+      apiKey: "test-key"
+    });
+    expect(config.routing).toMatchObject({
+      primaryProviderId: "mock",
+      timeoutMs: 1_000,
+      maxRetries: 1,
+      retryBackoffMs: 50
+    });
+    expect(config.providerRegistry).toHaveLength(1);
+    expect(config.providerRegistry[0]).toMatchObject({
+      id: "mock",
+      kind: "mock",
+      behavior: "success"
     });
   });
 
@@ -37,8 +48,37 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({
         GATEWAY_API_KEY: "test-key",
-        PROVIDER_KIND: "real_stub"
+        PRIMARY_PROVIDER_KIND: "real_stub"
       })
-    ).toThrow("REAL_PROVIDER_NAME is required.");
+    ).toThrow("PRIMARY_REAL_PROVIDER_NAME is required.");
+  });
+
+  it("rejects duplicate provider IDs across routing slots", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        PRIMARY_PROVIDER_ID: "provider-a",
+        SECONDARY_PROVIDER_KIND: "mock",
+        SECONDARY_PROVIDER_ID: "provider-a"
+      })
+    ).toThrow("Provider IDs must be unique.");
+  });
+
+  it("rejects partial secondary provider configuration", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        SECONDARY_PROVIDER_ID: "backup-provider"
+      })
+    ).toThrow("SECONDARY_PROVIDER_KIND is required when secondary provider settings are present.");
+  });
+
+  it("rejects invalid timeout settings", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        PROVIDER_TIMEOUT_MS: "0"
+      })
+    ).toThrow("PROVIDER_TIMEOUT_MS must be an integer");
   });
 });

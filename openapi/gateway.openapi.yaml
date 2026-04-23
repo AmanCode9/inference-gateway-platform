@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Inference Gateway API
   version: 0.1.0
-  description: Milestone 1 gateway contract.
+  description: Milestone 2 gateway contract.
 servers:
   - url: http://localhost:3000
 paths:
@@ -24,7 +24,7 @@ paths:
     post:
       summary: Create a chat completion
       operationId: createChatCompletion
-      description: Authenticates the request, validates a normalized payload, and delegates to the configured provider adapter. When `PROVIDER_KIND=real_stub`, the route returns a documented `501` stub response instead of calling an external API.
+      description: Authenticates the request, validates a normalized payload, and delegates to a config-selected provider execution layer with timeout, retry, and optional secondary fallback behavior. When the selected real provider is a stub, the route returns a documented `501` response instead of calling an external API.
       security:
         - GatewayApiKey: []
       requestBody:
@@ -71,7 +71,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "501":
-          description: The configured real provider adapter is a Milestone 1 stub and intentionally does not call an external API.
+          description: The configured real provider adapter is a Milestone 2 stub and intentionally does not call an external API.
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/RequestIdHeader"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Provider execution failed after retries and optional fallback handling.
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/RequestIdHeader"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "504":
+          description: Provider execution exceeded the configured timeout budget.
           headers:
             x-request-id:
               $ref: "#/components/headers/RequestIdHeader"

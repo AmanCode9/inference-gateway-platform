@@ -1,16 +1,16 @@
 import { createServer, type Server } from "node:http";
 import type { GatewayConfig } from "./config/index.js";
+import type { ChatCompletionService } from "./chat/service.js";
 import { createRequestContext, type RequestContext } from "./http/context.js";
 import { isHttpError } from "./http/errors.js";
 import type { Logger } from "./logging/logger.js";
-import type { ChatProvider } from "./providers/types.js";
 import { routeRequest } from "./http/routes.js";
 import { sendErrorResponse } from "./http/response.js";
 
 export interface AppDependencies {
   readonly config: GatewayConfig;
   readonly logger: Logger;
-  readonly provider: ChatProvider;
+  readonly chatCompletionService: ChatCompletionService;
 }
 
 export function createApp(dependencies: AppDependencies): Server {
@@ -77,7 +77,5 @@ export function startServer(server: Server, config: GatewayConfig, logger: Logge
 }
 
 function logRequestStarted(context: RequestContext): void {
-  context.logger.info("request_started", {
-    provider: context.provider.name
-  });
+  context.logger.info("request_started");
 }
