@@ -1,31 +1,100 @@
 # Inference Gateway Platform
 
-Production-style scaffold for a distributed AI inference gateway. Milestone 3 adds Redis-backed request governance on top of the Milestone 2 routing layer: fixed-window per-key rate limits, deterministic daily token quotas, monthly budget enforcement, and simple abuse guards while keeping the gateway small and production-oriented.
+Inference Gateway Platform is a production-style backend portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, and Redis-backed request governance with fail-closed safety. The repository is intentionally scoped: it shows the shape of a distributed inference platform without claiming future features such as semantic caching, Kafka runtime pipelines, Kubernetes deployment, eval-backed routing, or live external provider calls.
+
+## What Is Implemented
+
+Milestone 1 - gateway foundation:
+
+- TypeScript HTTP gateway using the built-in Node.js server.
+- `GET /health` endpoint.
+- `POST /v1/chat/completions` route.
+- API key authentication through `x-api-key`.
+- JSON parsing, request validation, request ID propagation, structured JSON errors, and structured logging.
+- Python eval worker skeleton.
+- Docker Compose local dependency scaffold.
+
+Milestone 2 - provider execution:
+
+- Provider registry built from environment configuration.
+- Deterministic primary provider selection.
+- Optional secondary provider fallback.
+- Request-level timeout budgets.
+- Bounded retry with backoff for retryable provider failures.
+- Lightweight local provider metrics.
+- Mock provider for local testing and a real-provider stub that intentionally does not call external APIs.
+
+Milestone 3 - Redis-backed governance:
+
+- Fixed-window per-API-key request rate limiting.
+- Daily token quota enforcement using a deterministic request-size estimate.
+- Monthly budget enforcement using integer minor-unit accounting.
+- Abuse guards for message count and content size.
+- Fail-closed `503 governance_unavailable` behavior when governance storage is unavailable.
+- Request-scoped governance idempotency keyed by API key, `x-request-id`, and a SHA-256 fingerprint of the validated normalized chat payload.
+- A 24-hour admission dedupe window independent of daily and monthly bucket reset boundaries.
+
+Milestone 3.5 - repository quality:
+
+- GitHub Actions CI for lint, typecheck, and tests.
+- Portfolio-ready README with architecture diagram, local setup, environment guidance, roadmap, and production-readiness notes.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Client[Client] --> Gateway[TypeScript Gateway]
+  Gateway --> RequestContext[Request Context<br/>x-request-id + logging]
+  RequestContext --> AuthValidation[Auth / Content-Type / JSON Validation]
+  AuthValidation --> Governance[Governance Layer<br/>rate limit + quota + budget + abuse guards]
+  Governance <--> Redis[(Redis<br/>Milestone 3 governance state)]
+  Governance --> ProviderExecution[Provider Execution Layer<br/>timeout + retry + fallback]
+  ProviderExecution --> MockProvider[Mock Provider]
+  ProviderExecution --> RealStub[Real Provider Stub<br/>no outbound API calls]
+  Gateway -. placeholder .-> EvalWorker[Python Eval Worker<br/>future evaluation work]
+  Gateway -. future contract only .-> Kafka[(Kafka<br/>future usage events)]
+  Gateway -. local scaffold .-> Postgres[(Postgres + pgvector<br/>no runtime writes yet)]
+```
+
+Current request flow:
+
+1. Client sends a chat-completions request.
+2. Gateway creates or propagates `x-request-id`.
+3. API key authentication and JSON validation run before governance.
+4. Governance applies abuse checks, usage estimation, rate limit, daily quota, and monthly budget admission.
+5. Provider execution runs with timeout, retry, and optional fallback.
+6. The final response is returned with the request ID.
 
 ## Repository Structure
 
 - `services/gateway/` - TypeScript HTTP gateway.
 - `workers/eval-worker/` - Python eval worker placeholder.
+- `openapi/` - gateway HTTP API contract.
+- `asyncapi/` - future usage-event contract placeholder.
 - `docs/` - product, architecture, and non-functional notes.
-- `openapi/` - gateway API contracts.
-- `asyncapi/` - event contracts for future usage events.
 - `infra/` - local infrastructure notes and future IaC location.
 - `dashboards/` - future Grafana dashboard assets.
-- `tests/` - future cross-service test assets.
+- `.github/workflows/` - GitHub Actions CI.
 
-## Local Setup
+## Local Development
 
 Prerequisites:
 
-- Node.js 20 or newer
-- pnpm 10 or newer
-- Python 3.12
-- Docker Compose, optional for local dependencies
+- Node.js 20 or newer.
+- pnpm 10 or newer.
+- Python 3.12.
+- Docker Compose, optional but recommended for local Redis/Postgres scaffolding.
 
-Install JavaScript dependencies:
+Install dependencies:
 
 ```sh
 pnpm install
+```
+
+Start local dependencies:
+
+```sh
+docker compose up -d
 ```
 
 Run the gateway locally:
@@ -43,81 +112,15 @@ The gateway exposes:
 - `GET /health`
 - `POST /v1/chat/completions`
 
-The chat completions route expects:
-
-- `x-api-key` header matching `GATEWAY_API_KEY`
-- optional `x-request-id` header for correlation and governance retry idempotency
-- `Content-Type: application/json`
-- a normalized payload with `model` and `messages`
-
-Routing is environment-configured:
-
-- `PRIMARY_PROVIDER_KIND` and `PRIMARY_PROVIDER_ID` select the primary adapter
-- `SECONDARY_PROVIDER_KIND` and `SECONDARY_PROVIDER_ID` optionally enable deterministic fallback
-- `PROVIDER_TIMEOUT_MS`, `PROVIDER_MAX_RETRIES`, and `PROVIDER_RETRY_BACKOFF_MS` control the execution budget
-- `REDIS_URL` and the `RATE_LIMIT_*`, `DAILY_TOKEN_QUOTA`, `MONTHLY_BUDGET_LIMIT_MINOR_UNITS`, and `ABUSE_*` settings control request governance
-
-Milestone 3 governance policy:
-
-- auth, JSON validation, and simple abuse guards run before provider execution
-- fixed-window rate limiting counts admitted requests per API key
-- token quota and monthly budget are charged once per admitted request using a deterministic request estimate
-- retries and fallback do not create extra token or budget charges
-- provider failures do not roll back the request-level estimate once the request is admitted
-- if Redis is unavailable, the gateway fails closed with `503 governance_unavailable`
-- daily token quotas reset at the next UTC midnight; monthly budgets reset at the next UTC month boundary
-
-Request retry idempotency:
-
-- clients may send `x-request-id`; the gateway echoes it and uses it as one input to governance idempotency
-- the governance admission key is scoped to API key, `x-request-id`, and a SHA-256 fingerprint of the validated normalized payload
-- the normalized payload fingerprint is derived from the trimmed `model` plus ordered trimmed `messages` roles and content
-- reuse the same `x-request-id` only when retrying the same logical request; the same `x-request-id` with a different normalized payload is governed as a distinct request
-- admitted request dedupe is retained for 24 hours independent of daily token and monthly budget bucket resets, so a retry across a UTC day or month rollover remains retry-safe within that window
-- after 24 hours, the same logical request may be governed and charged again
-
-Token approximation:
-
-- `estimated_tokens = ceil((model.length + sum(message.content.length)) / TOKEN_ESTIMATE_CHARS_PER_TOKEN)`
-- minimum estimated tokens per admitted request is `1`
-
-Monthly cost approximation:
-
-- `estimated_cost_minor_units = ceil(estimated_tokens * TOKEN_COST_PER_1K_MINOR_UNITS / 1000)`
-- cost is tracked in integer minor units to avoid floating-point drift
-
 Example request:
 
 ```sh
 curl -X POST http://localhost:3000/v1/chat/completions ^
   -H "Content-Type: application/json" ^
   -H "x-api-key: local-dev-gateway-key" ^
+  -H "x-request-id: req_local_demo" ^
   -d "{\"model\":\"mock-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
 ```
-
-To exercise the real-provider adapter stub as the primary provider:
-
-```sh
-$env:PRIMARY_PROVIDER_KIND="real_stub"
-$env:PRIMARY_PROVIDER_ID="openai-stub"
-$env:REAL_PROVIDER_NAME="openai"
-$env:REAL_PROVIDER_BASE_URL="https://api.openai.com/v1"
-pnpm --filter @igp/gateway dev
-```
-
-To enable fallback from a retryable mock primary to a secondary mock provider:
-
-```sh
-$env:PRIMARY_PROVIDER_KIND="mock"
-$env:PRIMARY_PROVIDER_ID="mock-primary"
-$env:PRIMARY_MOCK_BEHAVIOR="retryable_failure"
-$env:SECONDARY_PROVIDER_KIND="mock"
-$env:SECONDARY_PROVIDER_ID="mock-secondary"
-$env:SECONDARY_MOCK_BEHAVIOR="success"
-pnpm --filter @igp/gateway dev
-```
-
-The real-provider adapter remains a stub in Milestone 3 and does not make outbound API calls.
 
 Run the Python worker placeholder:
 
@@ -125,15 +128,57 @@ Run the Python worker placeholder:
 python workers/eval-worker/app/main.py
 ```
 
-Start local infrastructure placeholders:
+## Configuration
 
-```sh
-docker compose up -d
-```
+Local defaults are documented in `.env.example`. The gateway requires at least:
 
-Local Redis-backed governance defaults are documented in `.env.example`. The compose file already exposes Redis on `localhost:6379`.
+- `GATEWAY_API_KEY` - API key expected in the `x-api-key` request header.
+- `REDIS_URL` - Redis connection URL used by governance.
 
-## Checks
+Provider execution:
+
+- `PRIMARY_PROVIDER_KIND`, `PRIMARY_PROVIDER_ID` - primary provider selection.
+- `PRIMARY_MOCK_BEHAVIOR`, `PRIMARY_MOCK_DELAY_MS` - mock provider behavior for local testing.
+- `SECONDARY_PROVIDER_KIND`, `SECONDARY_PROVIDER_ID` - optional fallback provider.
+- `PROVIDER_TIMEOUT_MS`, `PROVIDER_MAX_RETRIES`, `PROVIDER_RETRY_BACKOFF_MS` - execution budget and retry behavior.
+
+Governance:
+
+- `RATE_LIMIT_MAX_REQUESTS`, `RATE_LIMIT_WINDOW_SECONDS` - fixed-window per-key request limit.
+- `DAILY_TOKEN_QUOTA` - daily token estimate quota.
+- `MONTHLY_BUDGET_LIMIT_MINOR_UNITS` - monthly budget in integer minor units.
+- `TOKEN_ESTIMATE_CHARS_PER_TOKEN`, `TOKEN_COST_PER_1K_MINOR_UNITS` - deterministic usage approximation.
+- `ABUSE_MAX_MESSAGE_COUNT`, `ABUSE_MAX_MESSAGE_CHARACTERS`, `ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS` - abuse guard thresholds.
+
+The real-provider adapter remains a Milestone 3 stub. Selecting `real_stub` validates configuration and returns a documented not-implemented response instead of calling an external API.
+
+## Governance Policy
+
+- Auth failures, malformed JSON, validation failures, and abuse-rejected requests do not consume governance counters.
+- Rate limits count admitted requests per API key.
+- Token quota and monthly budget are charged once per admitted request before provider execution.
+- Provider retries and fallback do not add extra token or budget charges.
+- Provider failures do not roll back usage once the request has been admitted.
+- Redis failures do not bypass governance; the gateway fails closed with `503 governance_unavailable`.
+
+Request retry idempotency:
+
+- Clients may send `x-request-id`; the gateway echoes it in responses.
+- Governance admission is scoped to API key, `x-request-id`, and a SHA-256 fingerprint of the validated normalized payload.
+- The normalized payload fingerprint is derived from the trimmed `model` plus ordered trimmed `messages` roles and content.
+- Reusing the same `x-request-id` with the same normalized payload is treated as the same logical governance admission for 24 hours.
+- Reusing the same `x-request-id` with a different normalized payload is governed as a distinct request.
+- After the 24-hour dedupe window, the same logical request may be governed and charged again.
+
+Usage approximation:
+
+- `estimated_tokens = ceil((model.length + sum(message.content.length)) / TOKEN_ESTIMATE_CHARS_PER_TOKEN)`
+- `estimated_cost_minor_units = ceil(estimated_tokens * TOKEN_COST_PER_1K_MINOR_UNITS / 1000)`
+- Minimum estimate per admitted request is `1` token and `1` minor unit.
+
+## Checks and CI
+
+Run the same checks locally that CI runs:
 
 ```sh
 pnpm run lint
@@ -141,39 +186,54 @@ pnpm run typecheck
 pnpm run test
 ```
 
-The root `test` script runs gateway tests and the eval worker unit tests.
+The root `test` script runs:
 
-## Milestone 3 Boundaries
+- gateway unit and integration tests through Vitest
+- eval worker tests through Python `unittest`
 
-Included:
+GitHub Actions runs these checks on `push` and `pull_request` to `main` using Node.js 20, pnpm, and Python 3.12.
 
-- Repository scaffold
-- Gateway health endpoint
-- Versioned `/v1/chat/completions` route with API key auth, validation, and adapter-based provider calls
-- Provider registry with deterministic primary and optional secondary routing
-- Request-level provider timeout budgets
-- Config-driven retries with backoff for retryable provider failures
-- Config-driven fallback to a secondary provider
-- Lightweight in-memory provider metrics
-- Redis-backed fixed-window per-key request rate limiting
-- Redis-backed daily token quota enforcement using a documented request-size estimate
-- Redis-backed monthly budget enforcement using integer minor-unit cost accounting
-- Simple abuse guards for message count and content size
-- Environment-based config loading
-- Structured JSON logging
-- Request ID propagation and structured error responses
-- Minimal gateway unit and integration tests
-- Python eval worker placeholder and tests
-- Docker Compose local dependency scaffold
+## Roadmap
 
-Not included yet:
+Implemented:
 
-- Semantic caching
-- Kafka event pipeline or runtime producer/consumer logic
-- Kubernetes manifests
-- Eval-backed routing
-- Dynamic model or cost-based routing
-- Streaming responses
-- Live external provider integration
-- Background jobs or reconciliation workers
-- SQL-backed billing or quota persistence
+- Milestone 1: authenticated chat-completions gateway slice.
+- Milestone 2: provider registry, routing, timeout budgets, retries, fallback, and local metrics.
+- Milestone 3: Redis-backed governance with rate limits, quotas, budget tracking, abuse guards, fail-closed behavior, and idempotent admission.
+- Milestone 3.5: CI, README polish, and architecture diagram.
+
+Next planned feature milestone:
+
+- Milestone 4: semantic caching.
+
+Future milestones, not implemented yet:
+
+- Kafka usage event pipeline.
+- Kubernetes manifests.
+- Eval-backed routing.
+- Live external provider integrations.
+- Dynamic model or cost-based routing.
+- Streaming responses.
+- SQL-backed billing or quota persistence.
+- Background reconciliation workers.
+
+## Production-Readiness Notes
+
+Current production-oriented qualities:
+
+- Strict TypeScript configuration.
+- Explicit config validation at startup.
+- Deterministic error response shape with `requestId`.
+- Request-scoped structured logging.
+- Fail-closed governance behavior.
+- Atomic Redis Lua admission path for governance counters and idempotency.
+- CI covering lint, typecheck, gateway tests, and eval-worker tests.
+
+Intentional boundaries:
+
+- No semantic caching until Milestone 4.
+- No Kafka runtime producer or consumer logic.
+- No Kubernetes manifests.
+- No eval-backed routing.
+- No live external provider calls.
+- No SQL/Postgres governance persistence.
