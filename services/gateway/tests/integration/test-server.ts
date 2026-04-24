@@ -3,6 +3,9 @@ import type { Server } from "node:http";
 import { createChatCompletionService } from "../../src/chat/service.js";
 import { createApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config/index.js";
+import { createGovernanceService } from "../../src/governance/service.js";
+import { createInMemoryGovernanceStore } from "../../src/governance/in-memory-store.js";
+import type { GovernanceStore } from "../../src/governance/types.js";
 import { createLogger } from "../../src/logging/logger.js";
 import { createProviderMetrics, type ProviderMetricsSnapshot } from "../../src/metrics/provider-metrics.js";
 import { createProviderRegistry } from "../../src/providers/registry.js";
@@ -13,8 +16,20 @@ export interface TestServer {
   readonly metrics: () => ProviderMetricsSnapshot;
 }
 
-export async function startTestServer(overrides: NodeJS.ProcessEnv = {}): Promise<TestServer> {
+export interface StartTestServerOptions {
+  readonly governanceStore?: GovernanceStore;
+}
+
+export async function startTestServer(
+  overrides: NodeJS.ProcessEnv = {},
+  options: StartTestServerOptions = {}
+): Promise<TestServer> {
   const config = loadConfig(createEnv(overrides));
+  const governanceStore = options.governanceStore ?? createInMemoryGovernanceStore();
+  const governanceService = createGovernanceService({
+    config: config.governance,
+    store: governanceStore
+  });
   const metrics = createProviderMetrics();
   const providerRegistry = createProviderRegistry(config.providerRegistry);
   const chatCompletionService = createChatCompletionService({
@@ -25,7 +40,8 @@ export async function startTestServer(overrides: NodeJS.ProcessEnv = {}): Promis
   const server = createApp({
     config,
     logger: createLogger(config),
-    chatCompletionService
+    chatCompletionService,
+    governanceService
   });
 
   await listen(server);
@@ -38,7 +54,7 @@ export async function startTestServer(overrides: NodeJS.ProcessEnv = {}): Promis
 
   return {
     url: (pathname: string) => `http://127.0.0.1:${address.port}${pathname}`,
-    close: () => close(server),
+    close: () => close(server, governanceStore),
     metrics: () => metrics.snapshot()
   };
 }
@@ -48,6 +64,9 @@ function createEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     LOG_LEVEL: "error",
     PORT: "3000",
     GATEWAY_API_KEY: "test-gateway-key",
+    REDIS_URL: "redis://localhost:6379",
+    REDIS_KEY_PREFIX: "test-gateway",
+    REDIS_CONNECT_TIMEOUT_MS: "1000",
     PRIMARY_PROVIDER_KIND: "mock",
     PRIMARY_PROVIDER_ID: "mock",
     PRIMARY_MOCK_BEHAVIOR: "success",
@@ -55,6 +74,15 @@ function createEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     PROVIDER_TIMEOUT_MS: "1000",
     PROVIDER_MAX_RETRIES: "1",
     PROVIDER_RETRY_BACKOFF_MS: "1",
+    RATE_LIMIT_MAX_REQUESTS: "100",
+    RATE_LIMIT_WINDOW_SECONDS: "60",
+    DAILY_TOKEN_QUOTA: "100000",
+    MONTHLY_BUDGET_LIMIT_MINOR_UNITS: "100000",
+    TOKEN_ESTIMATE_CHARS_PER_TOKEN: "4",
+    TOKEN_COST_PER_1K_MINOR_UNITS: "25",
+    ABUSE_MAX_MESSAGE_COUNT: "32",
+    ABUSE_MAX_MESSAGE_CHARACTERS: "4000",
+    ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS: "12000",
     ...overrides
   };
 }
@@ -69,15 +97,20 @@ function listen(server: Server): Promise<void> {
   });
 }
 
-function close(server: Server): Promise<void> {
+function close(server: Server, governanceStore: GovernanceStore): Promise<void> {
   return new Promise((resolve, reject) => {
-    server.close((error) => {
+    server.close(async (error) => {
       if (error) {
         reject(error);
         return;
       }
 
-      resolve();
+      try {
+        await governanceStore.close();
+        resolve();
+      } catch (closeError) {
+        reject(closeError);
+      }
     });
   });
 }

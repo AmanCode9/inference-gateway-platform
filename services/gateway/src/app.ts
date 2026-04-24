@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { GatewayConfig } from "./config/index.js";
 import type { ChatCompletionService } from "./chat/service.js";
+import type { GovernanceService } from "./governance/service.js";
 import { createRequestContext, type RequestContext } from "./http/context.js";
 import { isHttpError } from "./http/errors.js";
 import type { Logger } from "./logging/logger.js";
@@ -11,6 +12,7 @@ export interface AppDependencies {
   readonly config: GatewayConfig;
   readonly logger: Logger;
   readonly chatCompletionService: ChatCompletionService;
+  readonly governanceService: GovernanceService;
 }
 
 export function createApp(dependencies: AppDependencies): Server {

@@ -1,9 +1,12 @@
 import { createChatCompletionService } from "./chat/service.js";
 import { createApp, startServer } from "./app.js";
 import { loadConfig } from "./config/index.js";
+import { createGovernanceService } from "./governance/service.js";
+import { createRedisGovernanceStore } from "./governance/redis-store.js";
 import { createLogger } from "./logging/logger.js";
 import { createProviderMetrics } from "./metrics/provider-metrics.js";
 import { createProviderRegistry } from "./providers/registry.js";
+import { connectRedisClient } from "./redis/client.js";
 
 void bootstrap().catch((error: unknown) => {
   console.error(
@@ -21,6 +24,15 @@ void bootstrap().catch((error: unknown) => {
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger(config);
+  const redisClient = await connectRedisClient(config.governance.redis);
+  const governanceStore = createRedisGovernanceStore({
+    client: redisClient,
+    redis: config.governance.redis
+  });
+  const governanceService = createGovernanceService({
+    config: config.governance,
+    store: governanceStore
+  });
   const metrics = createProviderMetrics();
   const providerRegistry = createProviderRegistry(config.providerRegistry);
   const chatCompletionService = createChatCompletionService({
@@ -28,20 +40,30 @@ async function bootstrap(): Promise<void> {
     providerRegistry,
     routing: config.routing
   });
-  const server = createApp({ config, logger, chatCompletionService });
+  const server = createApp({ config, logger, chatCompletionService, governanceService });
+
+  logger.info("redis_connected");
 
   await startServer(server, config, logger);
 
   const shutdown = (signal: NodeJS.Signals): void => {
     logger.info("gateway_shutdown_requested", { signal });
-    server.close((error) => {
+    server.close(async (error) => {
       if (error) {
         logger.error("gateway_shutdown_failed", { error: error.message });
         process.exit(1);
       }
 
-      logger.info("gateway_shutdown_complete");
-      process.exit(0);
+      try {
+        await governanceStore.close();
+        logger.info("gateway_shutdown_complete");
+        process.exit(0);
+      } catch (closeError) {
+        logger.error("gateway_shutdown_failed", {
+          error: closeError instanceof Error ? closeError.message : "Unknown error"
+        });
+        process.exit(1);
+      }
     });
   };
 

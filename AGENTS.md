@@ -23,26 +23,31 @@ Current stack:
 - Keep the code production-oriented, not tutorial-style.
 
 ## Current milestone
-Milestone 1 only.
+Milestones 1, 2, and 3 are implemented.
+
+The current frozen milestone is Milestone 3: Redis-backed governance.
+
+Next planned milestone:
+- Milestone 4: semantic caching
 
 Allowed:
 - repo scaffolding
-- TypeScript gateway skeleton
+- TypeScript gateway skeleton and authenticated chat-completions route
 - Python eval worker skeleton
 - health endpoint
-- placeholder chat completions route
 - config loading
 - structured logging
 - minimal tests
 - Docker Compose local setup
+- provider registry, config-driven routing, timeout budgets, retries, fallback, and local metrics
+- Redis-backed governance: per-API-key rate limiting, daily token quota, monthly budget tracking, abuse protection, fail-closed governance behavior, and request-scoped governance idempotency
 
 Not allowed yet:
-- semantic caching
-- Redis rate limiting logic
-- Kafka event pipeline
+- semantic caching unless explicitly working on Milestone 4
+- Kafka runtime logic
 - Kubernetes manifests
 - eval-backed routing
-- multi-provider production routing
+- live external provider integration
 
 ## Code standards
 - Use strict TypeScript.

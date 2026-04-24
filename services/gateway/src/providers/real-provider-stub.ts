@@ -23,7 +23,7 @@ export class RealProviderStub implements ChatProvider {
     request: ChatCompletionRequest,
     context: ProviderContext
   ): Promise<ProviderChatCompletion> {
-    // Milestone 2 still keeps the real adapter at the provider boundary only.
+    // Milestone 3 still keeps the real adapter at the provider boundary only.
     context.logger.warn("real_provider_stub_invoked", {
       configuredBaseUrl: this.baseUrl,
       model: request.model,
@@ -33,7 +33,7 @@ export class RealProviderStub implements ChatProvider {
     throw new ProviderError(
       501,
       "provider_not_implemented",
-      `Configured provider adapter "${this.upstreamName}" is a Milestone 2 stub and does not call external APIs yet.`,
+      `Configured provider adapter "${this.upstreamName}" is a Milestone 3 stub and does not call external APIs yet.`,
       false
     );
   }

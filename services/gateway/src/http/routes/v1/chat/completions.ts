@@ -17,13 +17,22 @@ export async function handleChatCompletions(
     throw methodNotAllowed(["POST"]);
   }
 
-  requireApiKey(request, context.config);
+  const apiKey = requireApiKey(request, context.config);
   requireJsonContentType(request);
 
   const body = await readRequestBody(request, context.config.maxRequestBytes);
   const chatRequest = validateChatCompletionRequest(body);
+  const governanceResult = await context.governanceService.admitChatCompletion(chatRequest, {
+    apiKey,
+    requestId: context.requestId,
+    logger: context.logger.child({
+      component: "governance"
+    })
+  });
 
   context.logger.info("chat_completion_requested", {
+    estimatedCostMinorUnits: governanceResult.usageEstimate.estimatedCostMinorUnits,
+    estimatedTokens: governanceResult.usageEstimate.estimatedTokens,
     model: chatRequest.model,
     messageCount: chatRequest.messages.length
   });

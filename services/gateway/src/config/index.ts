@@ -17,6 +17,7 @@ interface GatewayConfigBase {
   readonly apiKey: string;
   readonly providerRegistry: readonly ProviderConfig[];
   readonly routing: ProviderRoutingConfig;
+  readonly governance: GovernanceConfig;
 }
 
 export interface ProviderRoutingConfig {
@@ -41,6 +42,37 @@ export interface RealStubProviderConfig {
   readonly baseUrl: string;
 }
 
+export interface RedisConfig {
+  readonly url: string;
+  readonly keyPrefix: string;
+  readonly connectTimeoutMs: number;
+}
+
+export interface RateLimitConfig {
+  readonly maxRequests: number;
+  readonly windowSeconds: number;
+}
+
+export interface UsageGovernanceConfig {
+  readonly dailyTokenQuota: number;
+  readonly monthlyBudgetLimitMinorUnits: number;
+  readonly tokenEstimateCharsPerToken: number;
+  readonly tokenCostPer1KMinorUnits: number;
+}
+
+export interface AbuseProtectionConfig {
+  readonly maxMessageCount: number;
+  readonly maxMessageCharacters: number;
+  readonly maxTotalMessageCharacters: number;
+}
+
+export interface GovernanceConfig {
+  readonly redis: RedisConfig;
+  readonly rateLimit: RateLimitConfig;
+  readonly usage: UsageGovernanceConfig;
+  readonly abuse: AbuseProtectionConfig;
+}
+
 export type ProviderConfig = MockProviderConfig | RealStubProviderConfig;
 export type GatewayConfig = GatewayConfigBase;
 
@@ -50,6 +82,17 @@ const DEFAULT_PROVIDER_TIMEOUT_MS = 1_000;
 const DEFAULT_PROVIDER_MAX_RETRIES = 1;
 const DEFAULT_PROVIDER_RETRY_BACKOFF_MS = 50;
 const DEFAULT_PRIMARY_PROVIDER_ID = "mock";
+const DEFAULT_REDIS_KEY_PREFIX = "inference-gateway";
+const DEFAULT_REDIS_CONNECT_TIMEOUT_MS = 2_000;
+const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 60;
+const DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60;
+const DEFAULT_DAILY_TOKEN_QUOTA = 20_000;
+const DEFAULT_MONTHLY_BUDGET_LIMIT_MINOR_UNITS = 10_000;
+const DEFAULT_TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4;
+const DEFAULT_TOKEN_COST_PER_1K_MINOR_UNITS = 25;
+const DEFAULT_ABUSE_MAX_MESSAGE_COUNT = 32;
+const DEFAULT_ABUSE_MAX_MESSAGE_CHARACTERS = 4_000;
+const DEFAULT_ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS = 12_000;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const primaryProviderConfig = readProviderConfig(env, "PRIMARY", {
@@ -92,7 +135,90 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
       }
     : routingBase;
 
-  const baseConfig: GatewayConfigBase = {
+  const governance: GovernanceConfig = validateGovernanceConfig({
+    redis: {
+      url: readRedisUrl(env.REDIS_URL),
+      keyPrefix: readString(env.REDIS_KEY_PREFIX, DEFAULT_REDIS_KEY_PREFIX),
+      connectTimeoutMs: readInteger(
+        env.REDIS_CONNECT_TIMEOUT_MS,
+        "REDIS_CONNECT_TIMEOUT_MS",
+        DEFAULT_REDIS_CONNECT_TIMEOUT_MS,
+        1,
+        60_000
+      )
+    },
+    rateLimit: {
+      maxRequests: readInteger(
+        env.RATE_LIMIT_MAX_REQUESTS,
+        "RATE_LIMIT_MAX_REQUESTS",
+        DEFAULT_RATE_LIMIT_MAX_REQUESTS,
+        1,
+        1_000_000
+      ),
+      windowSeconds: readInteger(
+        env.RATE_LIMIT_WINDOW_SECONDS,
+        "RATE_LIMIT_WINDOW_SECONDS",
+        DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
+        1,
+        86_400
+      )
+    },
+    usage: {
+      dailyTokenQuota: readInteger(
+        env.DAILY_TOKEN_QUOTA,
+        "DAILY_TOKEN_QUOTA",
+        DEFAULT_DAILY_TOKEN_QUOTA,
+        1,
+        1_000_000_000
+      ),
+      monthlyBudgetLimitMinorUnits: readInteger(
+        env.MONTHLY_BUDGET_LIMIT_MINOR_UNITS,
+        "MONTHLY_BUDGET_LIMIT_MINOR_UNITS",
+        DEFAULT_MONTHLY_BUDGET_LIMIT_MINOR_UNITS,
+        1,
+        1_000_000_000
+      ),
+      tokenEstimateCharsPerToken: readInteger(
+        env.TOKEN_ESTIMATE_CHARS_PER_TOKEN,
+        "TOKEN_ESTIMATE_CHARS_PER_TOKEN",
+        DEFAULT_TOKEN_ESTIMATE_CHARS_PER_TOKEN,
+        1,
+        1_000
+      ),
+      tokenCostPer1KMinorUnits: readInteger(
+        env.TOKEN_COST_PER_1K_MINOR_UNITS,
+        "TOKEN_COST_PER_1K_MINOR_UNITS",
+        DEFAULT_TOKEN_COST_PER_1K_MINOR_UNITS,
+        1,
+        1_000_000
+      )
+    },
+    abuse: {
+      maxMessageCount: readInteger(
+        env.ABUSE_MAX_MESSAGE_COUNT,
+        "ABUSE_MAX_MESSAGE_COUNT",
+        DEFAULT_ABUSE_MAX_MESSAGE_COUNT,
+        1,
+        10_000
+      ),
+      maxMessageCharacters: readInteger(
+        env.ABUSE_MAX_MESSAGE_CHARACTERS,
+        "ABUSE_MAX_MESSAGE_CHARACTERS",
+        DEFAULT_ABUSE_MAX_MESSAGE_CHARACTERS,
+        1,
+        1_000_000
+      ),
+      maxTotalMessageCharacters: readInteger(
+        env.ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS,
+        "ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS",
+        DEFAULT_ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS,
+        1,
+        10_000_000
+      )
+    }
+  });
+
+  return {
     nodeEnv: readString(env.NODE_ENV, "development"),
     port: readInteger(env.PORT, "PORT", DEFAULT_PORT, 1, 65_535),
     serviceName: readString(env.SERVICE_NAME, "inference-gateway"),
@@ -107,10 +233,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
       10_485_760
     ),
     providerRegistry,
-    routing
+    routing,
+    governance
   };
+}
 
-  return baseConfig;
+function validateGovernanceConfig(config: GovernanceConfig): GovernanceConfig {
+  if (config.redis.keyPrefix.includes(",")) {
+    throw new Error("REDIS_KEY_PREFIX must not contain commas.");
+  }
+
+  if (config.abuse.maxTotalMessageCharacters < config.abuse.maxMessageCharacters) {
+    throw new Error(
+      "ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS must be greater than or equal to ABUSE_MAX_MESSAGE_CHARACTERS."
+    );
+  }
+
+  return config;
 }
 
 function readString(value: string | undefined, fallback: string): string {
@@ -136,6 +275,26 @@ function readApiKey(value: string | undefined): string {
   }
 
   return apiKey;
+}
+
+function readRedisUrl(value: string | undefined): string {
+  const rawValue = readRequiredString(value, "REDIS_URL");
+
+  try {
+    const parsed = new URL(rawValue);
+
+    if (parsed.protocol !== "redis:" && parsed.protocol !== "rediss:") {
+      throw new Error("REDIS_URL must use the redis:// or rediss:// scheme.");
+    }
+
+    return parsed.toString();
+  } catch (error) {
+    if (error instanceof Error && error.message === "REDIS_URL must use the redis:// or rediss:// scheme.") {
+      throw error;
+    }
+
+    throw new Error("REDIS_URL must be a valid Redis URL.");
+  }
 }
 
 function readInteger(
@@ -170,14 +329,14 @@ function readLogLevel(value: string | undefined): LogLevel {
   throw new Error("LOG_LEVEL must be one of debug, info, warn, or error.");
 }
 
-function readProviderKind(value: string | undefined): ProviderKind {
+function readProviderKind(value: string | undefined, name = "PROVIDER_KIND"): ProviderKind {
   const rawValue = value?.trim() ?? "mock";
 
   if (rawValue === "mock" || rawValue === "real_stub") {
     return rawValue;
   }
 
-  throw new Error("PROVIDER_KIND must be one of mock or real_stub.");
+  throw new Error(`${name} must be one of mock or real_stub.`);
 }
 
 function readProviderConfig(
@@ -188,7 +347,7 @@ function readProviderConfig(
     readonly defaultKind: ProviderKind;
   }
 ): ProviderConfig {
-  const kind = readProviderKind(env[`${prefix}_PROVIDER_KIND`] ?? options.defaultKind);
+  const kind = readProviderKind(env[`${prefix}_PROVIDER_KIND`] ?? options.defaultKind, `${prefix}_PROVIDER_KIND`);
   const id = readProviderId(env[`${prefix}_PROVIDER_ID`], `${prefix}_PROVIDER_ID`, options.defaultId);
 
   if (kind === "real_stub") {
@@ -223,30 +382,30 @@ function readProviderConfig(
 }
 
 function readOptionalProviderConfig(env: NodeJS.ProcessEnv, prefix: "SECONDARY"): ProviderConfig | undefined {
-  if (!hasProviderSettings(env, prefix)) {
+  if (!hasSecondaryProviderSettings(env)) {
     return undefined;
   }
 
   const rawKind = env[`${prefix}_PROVIDER_KIND`]?.trim();
 
   if (!rawKind) {
-    throw new Error(`${prefix}_PROVIDER_KIND is required when secondary provider settings are present.`);
+    throw new Error("SECONDARY_PROVIDER_KIND is required when secondary provider settings are present.");
   }
 
   return readProviderConfig(env, prefix, {
     defaultId: "secondary-provider",
-    defaultKind: readProviderKind(rawKind)
+    defaultKind: readProviderKind(rawKind, "SECONDARY_PROVIDER_KIND")
   });
 }
 
-function hasProviderSettings(env: NodeJS.ProcessEnv, prefix: "SECONDARY"): boolean {
+function hasSecondaryProviderSettings(env: NodeJS.ProcessEnv): boolean {
   const names = [
-    `${prefix}_PROVIDER_KIND`,
-    `${prefix}_PROVIDER_ID`,
-    `${prefix}_MOCK_BEHAVIOR`,
-    `${prefix}_MOCK_DELAY_MS`,
-    `${prefix}_REAL_PROVIDER_NAME`,
-    `${prefix}_REAL_PROVIDER_BASE_URL`
+    "SECONDARY_PROVIDER_KIND",
+    "SECONDARY_PROVIDER_ID",
+    "SECONDARY_MOCK_BEHAVIOR",
+    "SECONDARY_MOCK_DELAY_MS",
+    "SECONDARY_REAL_PROVIDER_NAME",
+    "SECONDARY_REAL_PROVIDER_BASE_URL"
   ] as const;
 
   return names.some((name) => env[name] !== undefined);

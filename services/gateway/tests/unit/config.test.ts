@@ -3,7 +3,10 @@ import { loadConfig } from "../../src/config/index.js";
 
 describe("loadConfig", () => {
   it("loads defaults for optional environment variables", () => {
-    const config = loadConfig({ GATEWAY_API_KEY: "test-key" });
+    const config = loadConfig({
+      GATEWAY_API_KEY: "test-key",
+      REDIS_URL: "redis://localhost:6379"
+    });
 
     expect(config).toMatchObject({
       nodeEnv: "development",
@@ -26,28 +29,52 @@ describe("loadConfig", () => {
       kind: "mock",
       behavior: "success"
     });
+    expect(config.governance.redis.url).toBe("redis://localhost:6379");
+    expect(config.governance.rateLimit).toMatchObject({
+      maxRequests: 60,
+      windowSeconds: 60
+    });
+    expect(config.governance.usage).toMatchObject({
+      dailyTokenQuota: 20_000,
+      monthlyBudgetLimitMinorUnits: 10_000,
+      tokenEstimateCharsPerToken: 4,
+      tokenCostPer1KMinorUnits: 25
+    });
   });
 
   it("rejects an invalid port", () => {
-    expect(() => loadConfig({ GATEWAY_API_KEY: "test-key", PORT: "99999" })).toThrow(
-      "PORT must be an integer"
-    );
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        PORT: "99999"
+      })
+    ).toThrow("PORT must be an integer");
   });
 
   it("requires a non-blank gateway API key", () => {
-    expect(() => loadConfig({ GATEWAY_API_KEY: "   " })).toThrow("GATEWAY_API_KEY is required.");
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "   ",
+        REDIS_URL: "redis://localhost:6379"
+      })
+    ).toThrow("GATEWAY_API_KEY is required.");
   });
 
   it("rejects comma-containing gateway API keys at startup", () => {
-    expect(() => loadConfig({ GATEWAY_API_KEY: "alpha,beta" })).toThrow(
-      "GATEWAY_API_KEY must not contain commas."
-    );
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "alpha,beta",
+        REDIS_URL: "redis://localhost:6379"
+      })
+    ).toThrow("GATEWAY_API_KEY must not contain commas.");
   });
 
   it("requires real provider settings when the stub adapter is configured", () => {
     expect(() =>
       loadConfig({
         GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
         PRIMARY_PROVIDER_KIND: "real_stub"
       })
     ).toThrow("PRIMARY_REAL_PROVIDER_NAME is required.");
@@ -57,6 +84,7 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({
         GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
         PRIMARY_PROVIDER_ID: "provider-a",
         SECONDARY_PROVIDER_KIND: "mock",
         SECONDARY_PROVIDER_ID: "provider-a"
@@ -68,17 +96,51 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({
         GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
         SECONDARY_PROVIDER_ID: "backup-provider"
       })
     ).toThrow("SECONDARY_PROVIDER_KIND is required when secondary provider settings are present.");
+  });
+
+  it("rejects an invalid Redis URL", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "http://localhost:6379"
+      })
+    ).toThrow("REDIS_URL must use the redis:// or rediss:// scheme.");
   });
 
   it("rejects invalid timeout settings", () => {
     expect(() =>
       loadConfig({
         GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
         PROVIDER_TIMEOUT_MS: "0"
       })
     ).toThrow("PROVIDER_TIMEOUT_MS must be an integer");
+  });
+
+  it("rejects invalid governance settings", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        RATE_LIMIT_MAX_REQUESTS: "0"
+      })
+    ).toThrow("RATE_LIMIT_MAX_REQUESTS must be an integer");
+  });
+
+  it("rejects contradictory abuse thresholds", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        ABUSE_MAX_MESSAGE_CHARACTERS: "20",
+        ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS: "10"
+      })
+    ).toThrow(
+      "ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS must be greater than or equal to ABUSE_MAX_MESSAGE_CHARACTERS."
+    );
   });
 });

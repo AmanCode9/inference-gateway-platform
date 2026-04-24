@@ -3,12 +3,14 @@ import type { IncomingMessage } from "node:http";
 import type { GatewayConfig } from "../../config/index.js";
 import { unauthorized } from "../errors.js";
 
-export function requireApiKey(request: IncomingMessage, config: Pick<GatewayConfig, "apiKey">): void {
+export function requireApiKey(request: IncomingMessage, config: Pick<GatewayConfig, "apiKey">): string {
   const suppliedApiKey = readApiKeyHeader(request);
 
   if (!suppliedApiKey || !timingSafeCompare(suppliedApiKey, config.apiKey)) {
     throw unauthorized();
   }
+
+  return suppliedApiKey;
 }
 
 function readApiKeyHeader(request: IncomingMessage): string | undefined {

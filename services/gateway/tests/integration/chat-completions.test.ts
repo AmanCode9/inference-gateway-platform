@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createInMemoryGovernanceStore } from "../../src/governance/in-memory-store.js";
 import { startTestServer, type TestServer } from "./test-server.js";
 
 let server: TestServer | undefined;
@@ -208,6 +209,217 @@ describe("POST /v1/chat/completions", () => {
     expect(server.metrics().providerSuccess.mock).toBe(1);
   });
 
+  it("keeps same x-request-id and same normalized payload idempotent for governance", async () => {
+    server = await startTestServer({
+      RATE_LIMIT_MAX_REQUESTS: "1",
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_same_governance_payload"
+      },
+      body: JSON.stringify({
+        model: " mock-model ",
+        messages: [{ role: "user", content: "safe retry" }]
+      })
+    });
+    const retryResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_same_governance_payload"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: " safe retry " }]
+      })
+    });
+    const distinctResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_distinct_after_retry"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "safe retry" }]
+      })
+    });
+    const distinctBody = (await distinctResponse.json()) as {
+      error?: {
+        code?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(retryResponse.status).toBe(200);
+    expect(firstResponse.headers.get("x-request-id")).toBe("req_same_governance_payload");
+    expect(retryResponse.headers.get("x-request-id")).toBe("req_same_governance_payload");
+    expect(distinctResponse.status).toBe(429);
+    expect(distinctBody.error?.code).toBe("rate_limit_exceeded");
+    expect(distinctBody.error?.requestId).toBe("req_distinct_after_retry");
+    expect(server.metrics().providerSelected.mock).toBe(2);
+  });
+
+  it("governs the same x-request-id with a different normalized payload as distinct", async () => {
+    server = await startTestServer({
+      RATE_LIMIT_MAX_REQUESTS: "1",
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_reused_for_distinct_payload"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "first payload" }]
+      })
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_reused_for_distinct_payload"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "second payload" }]
+      })
+    });
+    const secondBody = (await secondResponse.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(429);
+    expect(secondBody.error?.code).toBe("rate_limit_exceeded");
+    expect(secondBody.error?.message).toBe("Rate limit exceeded.");
+    expect(secondBody.error?.requestId).toBe("req_reused_for_distinct_payload");
+    expect(Number(secondResponse.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(server.metrics().providerSelected.mock).toBe(1);
+  });
+
+  it("returns 429 when the per-key rate limit is exceeded", async () => {
+    server = await startTestServer({
+      RATE_LIMIT_MAX_REQUESTS: "2",
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+    });
+
+    const requestBody = JSON.stringify({
+      model: "mock-model",
+      messages: [{ role: "user", content: "rate limit please" }]
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const thirdResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const thirdBody = (await thirdResponse.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(thirdResponse.status).toBe(429);
+    expect(thirdBody.error?.code).toBe("rate_limit_exceeded");
+    expect(thirdBody.error?.message).toBe("Rate limit exceeded.");
+    expect(thirdBody.error?.requestId).toBe(thirdResponse.headers.get("x-request-id"));
+    expect(Number(thirdResponse.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(server.metrics().providerSelected.mock).toBe(2);
+  });
+
+  it("counts only fully admitted requests toward the rate limit", async () => {
+    server = await startTestServer({
+      RATE_LIMIT_MAX_REQUESTS: "1",
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+    });
+
+    const invalidResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "tool", content: "invalid" }]
+      })
+    });
+    const firstValidResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "first admitted request" }]
+      })
+    });
+    const secondValidResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "second admitted request" }]
+      })
+    });
+    const secondValidBody = (await secondValidResponse.json()) as {
+      error?: {
+        code?: string;
+      };
+    };
+
+    expect(invalidResponse.status).toBe(400);
+    expect(firstValidResponse.status).toBe(200);
+    expect(secondValidResponse.status).toBe(429);
+    expect(secondValidBody.error?.code).toBe("rate_limit_exceeded");
+    expect(server.metrics().providerSelected.mock).toBe(1);
+  });
+
   it("retries retryable provider failures with backoff", async () => {
     server = await startTestServer({
       PRIMARY_MOCK_BEHAVIOR: "flaky_once",
@@ -343,6 +555,198 @@ describe("POST /v1/chat/completions", () => {
     expect(metrics.providerSuccess["mock-secondary"]).toBeUndefined();
   });
 
+  it("enforces the daily token quota with a deterministic request estimate", async () => {
+    server = await startTestServer({
+      DAILY_TOKEN_QUOTA: "5",
+      TOKEN_ESTIMATE_CHARS_PER_TOKEN: "1",
+      TOKEN_COST_PER_1K_MINOR_UNITS: "1000"
+    });
+
+    const requestBody = JSON.stringify({
+      model: "m",
+      messages: [{ role: "user", content: "abcd" }]
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const secondBody = (await secondResponse.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(429);
+    expect(secondBody.error?.code).toBe("daily_token_quota_exceeded");
+    expect(secondBody.error?.message).toBe("Daily token quota exceeded.");
+    expect(secondBody.error?.requestId).toBe(secondResponse.headers.get("x-request-id"));
+    expect(server.metrics().providerSelected.mock).toBe(1);
+  });
+
+  it("charges quota on admission even when provider execution later fails", async () => {
+    server = await startTestServer({
+      DAILY_TOKEN_QUOTA: "5",
+      TOKEN_ESTIMATE_CHARS_PER_TOKEN: "1",
+      PRIMARY_PROVIDER_ID: "mock-primary",
+      PRIMARY_MOCK_BEHAVIOR: "retryable_failure",
+      PROVIDER_MAX_RETRIES: "0"
+    });
+
+    const requestBody = JSON.stringify({
+      model: "m",
+      messages: [{ role: "user", content: "abcd" }]
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const firstBody = (await firstResponse.json()) as {
+      error?: {
+        code?: string;
+      };
+    };
+    const secondBody = (await secondResponse.json()) as {
+      error?: {
+        code?: string;
+      };
+    };
+
+    expect(firstResponse.status).toBe(503);
+    expect(firstBody.error?.code).toBe("provider_unavailable");
+    expect(secondResponse.status).toBe(429);
+    expect(secondBody.error?.code).toBe("daily_token_quota_exceeded");
+    expect(server.metrics().providerSelected["mock-primary"]).toBe(1);
+  });
+
+  it("does not double-count quota usage when fallback is used", async () => {
+    server = await startTestServer({
+      DAILY_TOKEN_QUOTA: "10",
+      MONTHLY_BUDGET_LIMIT_MINOR_UNITS: "10",
+      TOKEN_ESTIMATE_CHARS_PER_TOKEN: "1",
+      TOKEN_COST_PER_1K_MINOR_UNITS: "1000",
+      PRIMARY_PROVIDER_ID: "mock-primary",
+      PRIMARY_MOCK_BEHAVIOR: "retryable_failure",
+      PROVIDER_MAX_RETRIES: "0",
+      SECONDARY_PROVIDER_KIND: "mock",
+      SECONDARY_PROVIDER_ID: "mock-secondary",
+      SECONDARY_MOCK_BEHAVIOR: "success"
+    });
+
+    const requestBody = JSON.stringify({
+      model: "m",
+      messages: [{ role: "user", content: "abcd" }]
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const thirdResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const thirdBody = (await thirdResponse.json()) as {
+      error?: {
+        code?: string;
+      };
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(thirdResponse.status).toBe(429);
+    expect(thirdBody.error?.code).toBe("daily_token_quota_exceeded");
+  });
+
+  it("enforces the monthly budget with deterministic minor-unit accounting", async () => {
+    server = await startTestServer({
+      DAILY_TOKEN_QUOTA: "50",
+      MONTHLY_BUDGET_LIMIT_MINOR_UNITS: "5",
+      TOKEN_ESTIMATE_CHARS_PER_TOKEN: "1",
+      TOKEN_COST_PER_1K_MINOR_UNITS: "1000"
+    });
+
+    const requestBody = JSON.stringify({
+      model: "m",
+      messages: [{ role: "user", content: "abcd" }]
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const secondBody = (await secondResponse.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(429);
+    expect(secondBody.error?.code).toBe("monthly_budget_exceeded");
+    expect(secondBody.error?.message).toBe("Monthly budget exceeded.");
+    expect(secondBody.error?.requestId).toBe(secondResponse.headers.get("x-request-id"));
+    expect(server.metrics().providerSelected.mock).toBe(1);
+  });
+
   it("returns 503 when both primary and fallback providers fail retryably", async () => {
     server = await startTestServer({
       PRIMARY_PROVIDER_ID: "mock-primary",
@@ -420,6 +824,172 @@ describe("POST /v1/chat/completions", () => {
     expect(metrics.providerFailure.mock).toBe(1);
   });
 
+  it("returns 400 when the message count exceeds the abuse limit", async () => {
+    server = await startTestServer({
+      ABUSE_MAX_MESSAGE_COUNT: "1"
+    });
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [
+          { role: "user", content: "first" },
+          { role: "assistant", content: "second" }
+        ]
+      })
+    });
+    const body = (await response.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(response.status).toBe(400);
+    expect(body.error?.code).toBe("invalid_request");
+    expect(body.error?.message).toBe("messages must contain at most 1 items.");
+    expect(body.error?.requestId).toBe(response.headers.get("x-request-id"));
+    expect(server.metrics().providerSelected.mock).toBeUndefined();
+  });
+
+  it("returns 400 when a single message exceeds the abuse content limit", async () => {
+    server = await startTestServer({
+      ABUSE_MAX_MESSAGE_CHARACTERS: "3",
+      ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS: "10"
+    });
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "four" }]
+      })
+    });
+    const body = (await response.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(response.status).toBe(400);
+    expect(body.error?.code).toBe("invalid_request");
+    expect(body.error?.message).toBe("message.content must contain at most 3 characters.");
+    expect(body.error?.requestId).toBe(response.headers.get("x-request-id"));
+  });
+
+  it("returns 400 when total message content exceeds the abuse limit", async () => {
+    server = await startTestServer({
+      ABUSE_MAX_MESSAGE_CHARACTERS: "5",
+      ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS: "5"
+    });
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [
+          { role: "user", content: "abc" },
+          { role: "assistant", content: "def" }
+        ]
+      })
+    });
+    const body = (await response.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(response.status).toBe(400);
+    expect(body.error?.code).toBe("invalid_request");
+    expect(body.error?.message).toBe("messages content must contain at most 5 characters in total.");
+    expect(body.error?.requestId).toBe(response.headers.get("x-request-id"));
+  });
+
+  it("returns 503 when the governance store is unavailable", async () => {
+    server = await startTestServer(
+      {},
+      {
+        governanceStore: createInMemoryGovernanceStore({
+          unavailable: true
+        })
+      }
+    );
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "redis down" }]
+      })
+    });
+    const body = (await response.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(response.status).toBe(503);
+    expect(body.error?.code).toBe("governance_unavailable");
+    expect(body.error?.message).toBe("Usage governance is temporarily unavailable.");
+    expect(body.error?.requestId).toBe(response.headers.get("x-request-id"));
+    expect(server.metrics().providerSelected.mock).toBeUndefined();
+  });
+
+  it("returns 413 when the request body exceeds the configured size limit", async () => {
+    server = await startTestServer({
+      MAX_REQUEST_BYTES: "20"
+    });
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "this body is intentionally too large" }]
+      })
+    });
+    const body = (await response.json()) as {
+      error?: {
+        code?: string;
+        message?: string;
+        requestId?: string;
+      };
+    };
+
+    expect(response.status).toBe(413);
+    expect(body.error?.code).toBe("request_too_large");
+    expect(body.error?.message).toBe("Request body is too large.");
+    expect(body.error?.requestId).toBe(response.headers.get("x-request-id"));
+    expect(server.metrics().providerSelected.mock).toBeUndefined();
+  });
+
   it("returns 501 when the real provider stub is configured", async () => {
     server = await startTestServer({
       PRIMARY_PROVIDER_KIND: "real_stub",
@@ -454,7 +1024,7 @@ describe("POST /v1/chat/completions", () => {
         code: "provider_not_implemented"
       }
     });
-    expect(body.error?.message).toContain("Milestone 2 stub");
+    expect(body.error?.message).toContain("Milestone 3 stub");
     expect(body.error?.requestId).toBe(response.headers.get("x-request-id"));
   });
 
