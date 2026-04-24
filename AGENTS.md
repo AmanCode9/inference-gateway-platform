@@ -13,7 +13,7 @@ Current stack:
 - Grafana
 - Docker
 - Kubernetes later
-- GitHub Actions later
+- GitHub Actions CI
 
 ## Working rules
 - Prioritize correctness, maintainability, and clear architecture over speed.
@@ -23,9 +23,10 @@ Current stack:
 - Keep the code production-oriented, not tutorial-style.
 
 ## Current milestone
-Milestones 1, 2, and 3 are implemented.
+Milestones 1, 2, 3, and 3.5 are implemented.
 
-The current frozen milestone is Milestone 3: Redis-backed governance.
+The current frozen feature milestone is Milestone 3: Redis-backed governance.
+Milestone 3.5 is a documentation and CI quality milestone only.
 
 Next planned milestone:
 - Milestone 4: semantic caching
@@ -39,6 +40,7 @@ Allowed:
 - structured logging
 - minimal tests
 - Docker Compose local setup
+- GitHub Actions CI
 - provider registry, config-driven routing, timeout budgets, retries, fallback, and local metrics
 - Redis-backed governance: per-API-key rate limiting, daily token quota, monthly budget tracking, abuse protection, fail-closed governance behavior, and request-scoped governance idempotency
 
