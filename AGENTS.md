@@ -23,13 +23,13 @@ Current stack:
 - Keep the code production-oriented, not tutorial-style.
 
 ## Current milestone
-Milestones 1, 2, 3, and 3.5 are implemented.
+Milestones 1, 2, 3, 3.5, and 4A are implemented.
 
-The current frozen feature milestone is Milestone 3: Redis-backed governance.
+The current frozen feature milestone is Milestone 4A: process-local exact cache foundation.
 Milestone 3.5 is a documentation and CI quality milestone only.
 
 Next planned milestone:
-- Milestone 4: semantic caching
+- Milestone 4B: persistent exact cache storage
 
 Allowed:
 - repo scaffolding
@@ -43,9 +43,10 @@ Allowed:
 - GitHub Actions CI
 - provider registry, config-driven routing, timeout budgets, retries, fallback, and local metrics
 - Redis-backed governance: per-API-key rate limiting, daily token quota, monthly budget tracking, abuse protection, fail-closed governance behavior, and request-scoped governance idempotency
+- process-local exact chat-completions cache with tenant isolation, canonical exact keys, fail-open behavior, and x-cache-status response headers
 
 Not allowed yet:
-- semantic caching unless explicitly working on Milestone 4
+- semantic caching unless explicitly working on a semantic-cache milestone
 - Kafka runtime logic
 - Kubernetes manifests
 - eval-backed routing

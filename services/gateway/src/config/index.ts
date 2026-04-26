@@ -18,6 +18,7 @@ interface GatewayConfigBase {
   readonly providerRegistry: readonly ProviderConfig[];
   readonly routing: ProviderRoutingConfig;
   readonly governance: GovernanceConfig;
+  readonly cache: CacheConfig;
 }
 
 export interface ProviderRoutingConfig {
@@ -73,6 +74,10 @@ export interface GovernanceConfig {
   readonly abuse: AbuseProtectionConfig;
 }
 
+export interface CacheConfig {
+  readonly exactEnabled: boolean;
+}
+
 export type ProviderConfig = MockProviderConfig | RealStubProviderConfig;
 export type GatewayConfig = GatewayConfigBase;
 
@@ -93,6 +98,7 @@ const DEFAULT_TOKEN_COST_PER_1K_MINOR_UNITS = 25;
 const DEFAULT_ABUSE_MAX_MESSAGE_COUNT = 32;
 const DEFAULT_ABUSE_MAX_MESSAGE_CHARACTERS = 4_000;
 const DEFAULT_ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS = 12_000;
+const DEFAULT_EXACT_CACHE_ENABLED = false;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const primaryProviderConfig = readProviderConfig(env, "PRIMARY", {
@@ -234,7 +240,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     ),
     providerRegistry,
     routing,
-    governance
+    governance,
+    cache: {
+      exactEnabled: readBoolean(
+        env.EXACT_CACHE_ENABLED,
+        "EXACT_CACHE_ENABLED",
+        DEFAULT_EXACT_CACHE_ENABLED
+      )
+    }
   };
 }
 
@@ -317,6 +330,24 @@ function readInteger(
   }
 
   return parsed;
+}
+
+function readBoolean(value: string | undefined, name: string, fallback: boolean): boolean {
+  const rawValue = value?.trim().toLowerCase();
+
+  if (!rawValue) {
+    return fallback;
+  }
+
+  if (rawValue === "true" || rawValue === "1") {
+    return true;
+  }
+
+  if (rawValue === "false" || rawValue === "0") {
+    return false;
+  }
+
+  throw new Error(`${name} must be true or false.`);
 }
 
 function readLogLevel(value: string | undefined): LogLevel {

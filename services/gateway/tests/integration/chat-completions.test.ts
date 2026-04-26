@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createInMemoryCacheRepository } from "../../src/cache/in-memory-repository.js";
+import type { CacheRepository } from "../../src/cache/repository.js";
+import type { CachedChatCompletion } from "../../src/cache/types.js";
 import { createInMemoryGovernanceStore } from "../../src/governance/in-memory-store.js";
 import { startTestServer, type TestServer } from "./test-server.js";
 
@@ -207,6 +210,331 @@ describe("POST /v1/chat/completions", () => {
     expect(body.choices?.[0]?.message?.content).toContain("Hello from tests");
     expect(server.metrics().providerSelected.mock).toBe(1);
     expect(server.metrics().providerSuccess.mock).toBe(1);
+  });
+
+  it("returns an exact cache hit for the same API key and normalized payload", async () => {
+    server = await startTestServer({
+      EXACT_CACHE_ENABLED: "true"
+    });
+
+    const requestBody = JSON.stringify({
+      model: " mock-model ",
+      messages: [{ role: "user", content: " cache me " }]
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_cache_first"
+      },
+      body: requestBody
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_cache_second"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "cache me" }]
+      })
+    });
+    const secondBody = (await secondResponse.json()) as {
+      requestId?: string;
+      choices?: Array<{
+        message?: {
+          content?: string;
+        };
+      }>;
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.headers.get("x-cache-status")).toBe("hit-exact");
+    expect(secondResponse.headers.get("x-request-id")).toBe("req_cache_second");
+    expect(secondBody.requestId).toBe("req_cache_second");
+    expect(secondBody.choices?.[0]?.message?.content).toContain("cache me");
+    expect(server.metrics().providerSelected.mock).toBe(1);
+    expect(server.metrics().providerSuccess.mock).toBe(1);
+    expect(server.cacheMetrics()).toMatchObject({
+      exactHitCount: 1,
+      missCount: 1
+    });
+  });
+
+  it("does not share exact cache entries across API keys", async () => {
+    const cacheRepository = createInMemoryCacheRepository();
+    const requestBody = JSON.stringify({
+      model: "mock-model",
+      messages: [{ role: "user", content: "tenant isolated" }]
+    });
+
+    server = await startTestServer(
+      {
+        GATEWAY_API_KEY: "tenant-a-key",
+        EXACT_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository
+      }
+    );
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "tenant-a-key"
+      },
+      body: requestBody
+    });
+
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(server.metrics().providerSelected.mock).toBe(1);
+
+    await server.close();
+    server = await startTestServer(
+      {
+        GATEWAY_API_KEY: "tenant-b-key",
+        EXACT_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository
+      }
+    );
+
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "tenant-b-key"
+      },
+      body: requestBody
+    });
+
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(server.metrics().providerSelected.mock).toBe(1);
+  });
+
+  it("does not use exact cache to bypass governance rejection", async () => {
+    server = await startTestServer({
+      EXACT_CACHE_ENABLED: "true",
+      RATE_LIMIT_MAX_REQUESTS: "1",
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+    });
+
+    const requestBody = JSON.stringify({
+      model: "mock-model",
+      messages: [{ role: "user", content: "governance still applies" }]
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_cache_governance_first"
+      },
+      body: requestBody
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key",
+        "x-request-id": "req_cache_governance_second"
+      },
+      body: requestBody
+    });
+    const secondBody = (await secondResponse.json()) as {
+      error?: {
+        code?: string;
+      };
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(secondResponse.status).toBe(429);
+    expect(secondBody.error?.code).toBe("rate_limit_exceeded");
+    expect(secondResponse.headers.get("x-cache-status")).toBeNull();
+    expect(server.metrics().providerSelected.mock).toBe(1);
+    expect(server.cacheMetrics()).toMatchObject({
+      exactHitCount: 0,
+      missCount: 1
+    });
+  });
+
+  it("rejects invalid API keys before cache lookup", async () => {
+    const cacheRepository = new RecordingCacheRepository({
+      failOnRead: true,
+      failOnWrite: true
+    });
+    server = await startTestServer(
+      {
+        EXACT_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository
+      }
+    );
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "wrong-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "do not cache" }]
+      })
+    });
+
+    expect(response.status).toBe(401);
+    expect(cacheRepository.readCount).toBe(0);
+    expect(cacheRepository.writeCount).toBe(0);
+    expect(server.metrics().providerSelected.mock).toBeUndefined();
+  });
+
+  it("rejects governance failures before cache lookup", async () => {
+    const cacheRepository = new RecordingCacheRepository({
+      failOnRead: true,
+      failOnWrite: true
+    });
+    server = await startTestServer(
+      {
+        DAILY_TOKEN_QUOTA: "1",
+        TOKEN_ESTIMATE_CHARS_PER_TOKEN: "1",
+        EXACT_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository
+      }
+    );
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "m",
+        messages: [{ role: "user", content: "too many tokens" }]
+      })
+    });
+    const body = (await response.json()) as {
+      error?: {
+        code?: string;
+      };
+    };
+
+    expect(response.status).toBe(429);
+    expect(body.error?.code).toBe("daily_token_quota_exceeded");
+    expect(cacheRepository.readCount).toBe(0);
+    expect(cacheRepository.writeCount).toBe(0);
+    expect(server.metrics().providerSelected.mock).toBeUndefined();
+  });
+
+  it("fails open when exact cache read fails", async () => {
+    const cacheRepository = new RecordingCacheRepository({
+      failOnRead: true
+    });
+    server = await startTestServer(
+      {
+        EXACT_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository
+      }
+    );
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "read failure" }]
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-cache-status")).toBe("bypass");
+    expect(cacheRepository.readCount).toBe(1);
+    expect(cacheRepository.writeCount).toBe(0);
+    expect(server.metrics().providerSelected.mock).toBe(1);
+    expect(server.cacheMetrics()).toMatchObject({
+      bypassCount: 1,
+      readErrorCount: 1
+    });
+  });
+
+  it("fails open when exact cache write fails", async () => {
+    const cacheRepository = new RecordingCacheRepository({
+      failOnWrite: true
+    });
+    server = await startTestServer(
+      {
+        EXACT_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository
+      }
+    );
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "write failure" }]
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-cache-status")).toBe("miss");
+    expect(cacheRepository.readCount).toBe(1);
+    expect(cacheRepository.writeCount).toBe(1);
+    expect(server.metrics().providerSelected.mock).toBe(1);
+    expect(server.cacheMetrics()).toMatchObject({
+      missCount: 1,
+      writeErrorCount: 1
+    });
+  });
+
+  it("bypasses exact cache when it is disabled", async () => {
+    server = await startTestServer({
+      EXACT_CACHE_ENABLED: "false"
+    });
+
+    const response = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "disabled cache" }]
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-cache-status")).toBe("bypass");
+    expect(server.metrics().providerSelected.mock).toBe(1);
+    expect(server.cacheMetrics().bypassCount).toBe(1);
   });
 
   it("keeps same x-request-id and same normalized payload idempotent for governance", async () => {
@@ -1056,3 +1384,36 @@ describe("POST /v1/chat/completions", () => {
     expect(body.error?.requestId).toBe(response.headers.get("x-request-id"));
   });
 });
+
+class RecordingCacheRepository implements CacheRepository {
+  public readCount = 0;
+  public writeCount = 0;
+  private readonly failOnRead: boolean;
+  private readonly failOnWrite: boolean;
+  private readonly entries = new Map<string, CachedChatCompletion>();
+
+  public constructor(options: { readonly failOnRead?: boolean; readonly failOnWrite?: boolean } = {}) {
+    this.failOnRead = options.failOnRead ?? false;
+    this.failOnWrite = options.failOnWrite ?? false;
+  }
+
+  public async getExact(cacheKey: string): Promise<CachedChatCompletion | undefined> {
+    this.readCount += 1;
+
+    if (this.failOnRead) {
+      throw new Error("Simulated cache read failure.");
+    }
+
+    return this.entries.get(cacheKey);
+  }
+
+  public async setExact(cacheKey: string, entry: CachedChatCompletion): Promise<void> {
+    this.writeCount += 1;
+
+    if (this.failOnWrite) {
+      throw new Error("Simulated cache write failure.");
+    }
+
+    this.entries.set(cacheKey, entry);
+  }
+}

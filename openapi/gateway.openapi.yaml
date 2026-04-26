@@ -47,6 +47,8 @@ paths:
           headers:
             x-request-id:
               $ref: "#/components/headers/RequestIdHeader"
+            x-cache-status:
+              $ref: "#/components/headers/CacheStatusHeader"
           content:
             application/json:
               schema:
@@ -145,6 +147,11 @@ components:
       schema:
         type: integer
         minimum: 1
+    CacheStatusHeader:
+      description: Exact-cache outcome for a successful chat completion response.
+      schema:
+        type: string
+        enum: [miss, hit-exact, bypass]
   securitySchemes:
     GatewayApiKey:
       type: apiKey

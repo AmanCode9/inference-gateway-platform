@@ -2,11 +2,15 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createChatCompletionService } from "../../src/chat/service.js";
 import { createApp } from "../../src/app.js";
+import { createInMemoryCacheRepository } from "../../src/cache/in-memory-repository.js";
+import type { CacheRepository } from "../../src/cache/repository.js";
+import { createCacheService } from "../../src/cache/service.js";
 import { loadConfig } from "../../src/config/index.js";
 import { createGovernanceService } from "../../src/governance/service.js";
 import { createInMemoryGovernanceStore } from "../../src/governance/in-memory-store.js";
 import type { GovernanceStore } from "../../src/governance/types.js";
 import { createLogger } from "../../src/logging/logger.js";
+import { createCacheMetrics, type CacheMetricsSnapshot } from "../../src/metrics/cache-metrics.js";
 import { createProviderMetrics, type ProviderMetricsSnapshot } from "../../src/metrics/provider-metrics.js";
 import { createProviderRegistry } from "../../src/providers/registry.js";
 
@@ -14,10 +18,12 @@ export interface TestServer {
   readonly url: (pathname: string) => string;
   readonly close: () => Promise<void>;
   readonly metrics: () => ProviderMetricsSnapshot;
+  readonly cacheMetrics: () => CacheMetricsSnapshot;
 }
 
 export interface StartTestServerOptions {
   readonly governanceStore?: GovernanceStore;
+  readonly cacheRepository?: CacheRepository;
 }
 
 export async function startTestServer(
@@ -30,6 +36,12 @@ export async function startTestServer(
     config: config.governance,
     store: governanceStore
   });
+  const cacheMetrics = createCacheMetrics();
+  const cacheService = createCacheService({
+    config: config.cache,
+    metrics: cacheMetrics,
+    repository: options.cacheRepository ?? createInMemoryCacheRepository()
+  });
   const metrics = createProviderMetrics();
   const providerRegistry = createProviderRegistry(config.providerRegistry);
   const chatCompletionService = createChatCompletionService({
@@ -40,6 +52,7 @@ export async function startTestServer(
   const server = createApp({
     config,
     logger: createLogger(config),
+    cacheService,
     chatCompletionService,
     governanceService
   });
@@ -55,7 +68,8 @@ export async function startTestServer(
   return {
     url: (pathname: string) => `http://127.0.0.1:${address.port}${pathname}`,
     close: () => close(server, governanceStore),
-    metrics: () => metrics.snapshot()
+    metrics: () => metrics.snapshot(),
+    cacheMetrics: () => cacheMetrics.snapshot()
   };
 }
 
@@ -83,6 +97,7 @@ function createEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     ABUSE_MAX_MESSAGE_COUNT: "32",
     ABUSE_MAX_MESSAGE_CHARACTERS: "4000",
     ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS: "12000",
+    EXACT_CACHE_ENABLED: "false",
     ...overrides
   };
 }

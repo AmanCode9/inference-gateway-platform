@@ -37,25 +37,43 @@ export async function handleChatCompletions(
     messageCount: chatRequest.messages.length
   });
 
-  const executionResult = await context.chatCompletionService.createChatCompletion(chatRequest, {
-    requestId: context.requestId,
-    logger: context.logger.child({
-      component: "provider_execution"
-    })
-  });
+  const executionResult = await context.cacheService.getOrCreateChatCompletion(
+    chatRequest,
+    {
+      apiKey,
+      logger: context.logger.child({
+        component: "cache"
+      })
+    },
+    () =>
+      context.chatCompletionService.createChatCompletion(chatRequest, {
+        requestId: context.requestId,
+        logger: context.logger.child({
+          component: "provider_execution"
+        })
+      })
+  );
 
   context.logger.info("chat_completion_succeeded", {
     model: executionResult.completion.model,
     provider: executionResult.metadata.provider,
     choiceCount: executionResult.completion.choices.length,
     fallbackUsed: executionResult.metadata.fallbackUsed,
-    retryCount: executionResult.metadata.retryCount
+    retryCount: executionResult.metadata.retryCount,
+    cacheStatus: executionResult.cacheStatus
   });
 
-  sendJson(response, 200, {
-    ...executionResult.completion,
-    requestId: context.requestId
-  } satisfies ChatCompletionResponse);
+  sendJson(
+    response,
+    200,
+    {
+      ...executionResult.completion,
+      requestId: context.requestId
+    } satisfies ChatCompletionResponse,
+    {
+      "x-cache-status": executionResult.cacheStatus
+    }
+  );
 }
 
 async function readRequestBody(request: IncomingMessage, maxRequestBytes: number): Promise<unknown> {
