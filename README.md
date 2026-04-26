@@ -1,6 +1,6 @@
 # Inference Gateway Platform
 
-Inference Gateway Platform is a production-style backend portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, and Redis-backed request governance with fail-closed safety. The repository is intentionally scoped: it shows the shape of a distributed inference platform without claiming future features such as semantic caching, Kafka runtime pipelines, Kubernetes deployment, eval-backed routing, or live external provider calls.
+Inference Gateway Platform is a production-style backend portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, Redis-backed request governance with fail-closed safety, and a process-local exact cache foundation. The repository is intentionally scoped: it shows the shape of a distributed inference platform without claiming future features such as semantic caching, Kafka runtime pipelines, Kubernetes deployment, eval-backed routing, or live external provider calls.
 
 ## What Is Implemented
 
@@ -39,6 +39,14 @@ Milestone 3.5 - repository quality:
 - GitHub Actions CI for lint, typecheck, and tests.
 - Portfolio-ready README with architecture diagram, local setup, environment guidance, roadmap, and production-readiness notes.
 
+Milestone 4A - exact cache foundation:
+
+- Process-local, non-persistent exact cache for successful chat-completions provider responses.
+- Canonical normalized cache keys scoped by hashed API key/tenant and exact request payload.
+- Cache lookup runs only after auth, validation, and governance admission.
+- Fail-open cache read/write behavior.
+- `x-cache-status` response header with `miss`, `hit-exact`, or `bypass`.
+
 ## Architecture
 
 ```mermaid
@@ -48,7 +56,9 @@ flowchart LR
   RequestContext --> AuthValidation[Auth / Content-Type / JSON Validation]
   AuthValidation --> Governance[Governance Layer<br/>rate limit + quota + budget + abuse guards]
   Governance <--> Redis[(Redis<br/>Milestone 3 governance state)]
-  Governance --> ProviderExecution[Provider Execution Layer<br/>timeout + retry + fallback]
+  Governance --> ExactCache[Exact Cache Service<br/>process-local + fail-open]
+  ExactCache <--> CacheRepo[(In-memory Cache<br/>Milestone 4A only)]
+  ExactCache --> ProviderExecution[Provider Execution Layer<br/>timeout + retry + fallback]
   ProviderExecution --> MockProvider[Mock Provider]
   ProviderExecution --> RealStub[Real Provider Stub<br/>no outbound API calls]
   Gateway -. placeholder .-> EvalWorker[Python Eval Worker<br/>future evaluation work]
@@ -62,8 +72,10 @@ Current request flow:
 2. Gateway creates or propagates `x-request-id`.
 3. API key authentication and JSON validation run before governance.
 4. Governance applies abuse checks, usage estimation, rate limit, daily quota, and monthly budget admission.
-5. Provider execution runs with timeout, retry, and optional fallback.
-6. The final response is returned with the request ID.
+5. Exact cache lookup runs if enabled; cache failures fail open.
+6. On an exact hit, the cached provider completion is returned with the current request ID.
+7. On a miss or bypass, provider execution runs with timeout, retry, and optional fallback.
+8. The final response is returned with the request ID and `x-cache-status`.
 
 ## Repository Structure
 
@@ -150,6 +162,10 @@ Governance:
 - `TOKEN_ESTIMATE_CHARS_PER_TOKEN`, `TOKEN_COST_PER_1K_MINOR_UNITS` - deterministic usage approximation.
 - `ABUSE_MAX_MESSAGE_COUNT`, `ABUSE_MAX_MESSAGE_CHARACTERS`, `ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS` - abuse guard thresholds.
 
+Exact cache:
+
+- `EXACT_CACHE_ENABLED` - enables the Milestone 4A process-local exact cache when set to `true`; defaults to `false`.
+
 The real-provider adapter remains a Milestone 3 stub. Selecting `real_stub` validates configuration and returns a documented not-implemented response instead of calling an external API.
 
 ## Governance Policy
@@ -176,6 +192,19 @@ Usage approximation:
 - `estimated_cost_minor_units = ceil(estimated_tokens * TOKEN_COST_PER_1K_MINOR_UNITS / 1000)`
 - Minimum estimate per admitted request is `1` token and `1` minor unit.
 
+## Exact Cache Policy
+
+- Exact cache is disabled by default and enabled with `EXACT_CACHE_ENABLED=true`.
+- Cache lookup happens only after request ID creation, auth, content-type validation, JSON validation, and governance admission.
+- Cache hits still pass through Milestone 3 governance; cache does not change rate, quota, or budget accounting semantics.
+- Cache keys include a schema version, hashed API key/tenant identity, and a SHA-256 hash of the canonical normalized request payload.
+- The canonical payload includes all currently supported response-affecting chat request fields: `model` and ordered `messages` with `role` and `content`.
+- Object keys are sorted recursively, array order is preserved, and undefined fields are removed before hashing.
+- The in-memory cache stores successful provider responses only.
+- Cache read failures return `x-cache-status: bypass` and call the provider normally.
+- Cache write failures return the provider response successfully with `x-cache-status: miss`.
+- The cache is process-local and non-persistent. It is not distributed, durable, or Postgres-backed in Milestone 4A.
+
 ## Checks and CI
 
 Run the same checks locally that CI runs:
@@ -201,13 +230,15 @@ Implemented:
 - Milestone 2: provider registry, routing, timeout budgets, retries, fallback, and local metrics.
 - Milestone 3: Redis-backed governance with rate limits, quotas, budget tracking, abuse guards, fail-closed behavior, and idempotent admission.
 - Milestone 3.5: CI, README polish, and architecture diagram.
+- Milestone 4A: process-local exact cache foundation.
 
 Next planned feature milestone:
 
-- Milestone 4: semantic caching.
+- Milestone 4B: persistent exact cache storage.
 
 Future milestones, not implemented yet:
 
+- Semantic caching.
 - Kafka usage event pipeline.
 - Kubernetes manifests.
 - Eval-backed routing.
@@ -227,13 +258,15 @@ Current production-oriented qualities:
 - Request-scoped structured logging.
 - Fail-closed governance behavior.
 - Atomic Redis Lua admission path for governance counters and idempotency.
+- Fail-open process-local exact cache path.
 - CI covering lint, typecheck, gateway tests, and eval-worker tests.
 
 Intentional boundaries:
 
-- No semantic caching until Milestone 4.
+- No semantic caching.
 - No Kafka runtime producer or consumer logic.
 - No Kubernetes manifests.
 - No eval-backed routing.
 - No live external provider calls.
 - No SQL/Postgres governance persistence.
+- No distributed, durable, or Postgres-backed cache in Milestone 4A.

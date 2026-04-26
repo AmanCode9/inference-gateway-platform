@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { GatewayConfig } from "./config/index.js";
+import type { CacheService } from "./cache/service.js";
 import type { ChatCompletionService } from "./chat/service.js";
 import type { GovernanceService } from "./governance/service.js";
 import { createRequestContext, type RequestContext } from "./http/context.js";
@@ -11,6 +12,7 @@ import { sendErrorResponse } from "./http/response.js";
 export interface AppDependencies {
   readonly config: GatewayConfig;
   readonly logger: Logger;
+  readonly cacheService: CacheService;
   readonly chatCompletionService: ChatCompletionService;
   readonly governanceService: GovernanceService;
 }

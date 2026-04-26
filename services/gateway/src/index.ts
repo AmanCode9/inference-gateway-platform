@@ -1,9 +1,12 @@
 import { createChatCompletionService } from "./chat/service.js";
 import { createApp, startServer } from "./app.js";
+import { createInMemoryCacheRepository } from "./cache/in-memory-repository.js";
+import { createCacheService } from "./cache/service.js";
 import { loadConfig } from "./config/index.js";
 import { createGovernanceService } from "./governance/service.js";
 import { createRedisGovernanceStore } from "./governance/redis-store.js";
 import { createLogger } from "./logging/logger.js";
+import { createCacheMetrics } from "./metrics/cache-metrics.js";
 import { createProviderMetrics } from "./metrics/provider-metrics.js";
 import { createProviderRegistry } from "./providers/registry.js";
 import { connectRedisClient } from "./redis/client.js";
@@ -33,6 +36,12 @@ async function bootstrap(): Promise<void> {
     config: config.governance,
     store: governanceStore
   });
+  const cacheMetrics = createCacheMetrics();
+  const cacheService = createCacheService({
+    config: config.cache,
+    metrics: cacheMetrics,
+    repository: createInMemoryCacheRepository()
+  });
   const metrics = createProviderMetrics();
   const providerRegistry = createProviderRegistry(config.providerRegistry);
   const chatCompletionService = createChatCompletionService({
@@ -40,7 +49,7 @@ async function bootstrap(): Promise<void> {
     providerRegistry,
     routing: config.routing
   });
-  const server = createApp({ config, logger, chatCompletionService, governanceService });
+  const server = createApp({ config, logger, cacheService, chatCompletionService, governanceService });
 
   logger.info("redis_connected");
 

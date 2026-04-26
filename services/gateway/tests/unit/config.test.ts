@@ -40,6 +40,9 @@ describe("loadConfig", () => {
       tokenEstimateCharsPerToken: 4,
       tokenCostPer1KMinorUnits: 25
     });
+    expect(config.cache).toEqual({
+      exactEnabled: false
+    });
   });
 
   it("rejects an invalid port", () => {
@@ -142,5 +145,25 @@ describe("loadConfig", () => {
     ).toThrow(
       "ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS must be greater than or equal to ABUSE_MAX_MESSAGE_CHARACTERS."
     );
+  });
+
+  it("loads exact cache configuration", () => {
+    const config = loadConfig({
+      GATEWAY_API_KEY: "test-key",
+      REDIS_URL: "redis://localhost:6379",
+      EXACT_CACHE_ENABLED: "true"
+    });
+
+    expect(config.cache.exactEnabled).toBe(true);
+  });
+
+  it("rejects invalid exact cache settings", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        EXACT_CACHE_ENABLED: "sometimes"
+      })
+    ).toThrow("EXACT_CACHE_ENABLED must be true or false.");
   });
 });
