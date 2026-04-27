@@ -41,7 +41,9 @@ describe("loadConfig", () => {
       tokenCostPer1KMinorUnits: 25
     });
     expect(config.cache).toEqual({
-      exactEnabled: false
+      exactEnabled: false,
+      backend: "memory",
+      ttlSeconds: 86_400
     });
   });
 
@@ -151,6 +153,28 @@ describe("loadConfig", () => {
     const config = loadConfig({
       GATEWAY_API_KEY: "test-key",
       REDIS_URL: "redis://localhost:6379",
+      CACHE_ENABLED: "true",
+      CACHE_BACKEND: "postgres",
+      CACHE_TTL_SECONDS: "3600",
+      CACHE_POSTGRES_OPERATION_TIMEOUT_MS: "125",
+      DATABASE_URL: "postgres://user:pass@localhost:5432/inference_gateway"
+    });
+
+    expect(config.cache).toEqual({
+      exactEnabled: true,
+      backend: "postgres",
+      ttlSeconds: 3_600,
+      postgres: {
+        databaseUrl: "postgres://user:pass@localhost:5432/inference_gateway",
+        operationTimeoutMs: 125
+      }
+    });
+  });
+
+  it("keeps the Milestone 4A exact cache enabled variable compatible", () => {
+    const config = loadConfig({
+      GATEWAY_API_KEY: "test-key",
+      REDIS_URL: "redis://localhost:6379",
       EXACT_CACHE_ENABLED: "true"
     });
 
@@ -165,5 +189,47 @@ describe("loadConfig", () => {
         EXACT_CACHE_ENABLED: "sometimes"
       })
     ).toThrow("EXACT_CACHE_ENABLED must be true or false.");
+  });
+
+  it("rejects conflicting exact cache enabled variables", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        CACHE_ENABLED: "true",
+        EXACT_CACHE_ENABLED: "false"
+      })
+    ).toThrow("CACHE_ENABLED and EXACT_CACHE_ENABLED must not conflict.");
+  });
+
+  it("rejects a postgres cache backend without a database URL", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        CACHE_BACKEND: "postgres"
+      })
+    ).toThrow("DATABASE_URL is required.");
+  });
+
+  it("rejects unsupported cache backends", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        CACHE_BACKEND: "redis"
+      })
+    ).toThrow("CACHE_BACKEND must be one of memory or postgres.");
+  });
+
+  it("rejects invalid postgres cache URLs", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        CACHE_BACKEND: "postgres",
+        DATABASE_URL: "mysql://localhost:3306/cache"
+      })
+    ).toThrow("DATABASE_URL must use the postgres:// or postgresql:// scheme.");
   });
 });

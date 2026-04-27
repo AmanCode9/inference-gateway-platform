@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { MockProviderBehavior } from "../config/index.js";
 import type { ChatCompletionRequest, ProviderChatCompletion } from "../chat/types.js";
 import { ProviderError } from "./errors.js";
@@ -55,7 +56,7 @@ export class MockChatProvider implements ChatProvider {
       });
 
       return {
-        id: `chatcmpl_${context.requestId}`,
+        id: `chatcmpl_${randomUUID()}`,
         object: "chat.completion",
         created: Math.floor(Date.now() / 1_000),
         model: request.model,

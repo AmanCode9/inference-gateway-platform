@@ -1,6 +1,6 @@
 import { createChatCompletionService } from "./chat/service.js";
 import { createApp, startServer } from "./app.js";
-import { createInMemoryCacheRepository } from "./cache/in-memory-repository.js";
+import { createConfiguredCacheRepository } from "./cache/factory.js";
 import { createCacheService } from "./cache/service.js";
 import { loadConfig } from "./config/index.js";
 import { createGovernanceService } from "./governance/service.js";
@@ -37,10 +37,11 @@ async function bootstrap(): Promise<void> {
     store: governanceStore
   });
   const cacheMetrics = createCacheMetrics();
+  const cacheRepositoryHandle = createConfiguredCacheRepository(config.cache);
   const cacheService = createCacheService({
     config: config.cache,
     metrics: cacheMetrics,
-    repository: createInMemoryCacheRepository()
+    repository: cacheRepositoryHandle.repository
   });
   const metrics = createProviderMetrics();
   const providerRegistry = createProviderRegistry(config.providerRegistry);
@@ -64,7 +65,7 @@ async function bootstrap(): Promise<void> {
       }
 
       try {
-        await governanceStore.close();
+        await Promise.all([governanceStore.close(), cacheRepositoryHandle.close()]);
         logger.info("gateway_shutdown_complete");
         process.exit(0);
       } catch (closeError) {

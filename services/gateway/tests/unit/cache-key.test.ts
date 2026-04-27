@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ChatCompletionRequest } from "../../src/chat/types.js";
-import { canonicalStringify, createExactChatCacheKey } from "../../src/cache/key.js";
+import {
+  EXACT_CHAT_CACHE_SCHEMA_VERSION,
+  canonicalStringify,
+  createExactChatCacheKey,
+  parseExactChatCacheKey
+} from "../../src/cache/key.js";
 
 describe("createExactChatCacheKey", () => {
   it("uses the same key for the same normalized request", () => {
@@ -75,6 +80,20 @@ describe("createExactChatCacheKey", () => {
     });
 
     expect(cacheKey).not.toContain("tenant-secret-api-key");
+  });
+
+  it("parses tenant hash and request fingerprint from exact cache keys", () => {
+    const cacheKey = createExactChatCacheKey({
+      apiKey: "tenant-a",
+      request: createRequest()
+    });
+
+    expect(parseExactChatCacheKey(cacheKey)).toEqual({
+      cachePolicyVersion: EXACT_CHAT_CACHE_SCHEMA_VERSION,
+      tenantHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      requestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      exactCacheKey: cacheKey
+    });
   });
 
   it("canonical stringification removes undefined object fields without mutating input", () => {

@@ -1,5 +1,6 @@
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type ProviderKind = "mock" | "real_stub";
+export type CacheBackend = "memory" | "postgres";
 export type MockProviderBehavior =
   | "success"
   | "retryable_failure"
@@ -76,6 +77,14 @@ export interface GovernanceConfig {
 
 export interface CacheConfig {
   readonly exactEnabled: boolean;
+  readonly backend: CacheBackend;
+  readonly ttlSeconds: number;
+  readonly postgres?: CachePostgresConfig;
+}
+
+export interface CachePostgresConfig {
+  readonly databaseUrl: string;
+  readonly operationTimeoutMs: number;
 }
 
 export type ProviderConfig = MockProviderConfig | RealStubProviderConfig;
@@ -99,6 +108,9 @@ const DEFAULT_ABUSE_MAX_MESSAGE_COUNT = 32;
 const DEFAULT_ABUSE_MAX_MESSAGE_CHARACTERS = 4_000;
 const DEFAULT_ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS = 12_000;
 const DEFAULT_EXACT_CACHE_ENABLED = false;
+const DEFAULT_CACHE_BACKEND: CacheBackend = "memory";
+const DEFAULT_CACHE_TTL_SECONDS = 86_400;
+const DEFAULT_CACHE_POSTGRES_OPERATION_TIMEOUT_MS = 250;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const primaryProviderConfig = readProviderConfig(env, "PRIMARY", {
@@ -224,6 +236,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     }
   });
 
+  const cache = readCacheConfig(env);
+
   return {
     nodeEnv: readString(env.NODE_ENV, "development"),
     port: readInteger(env.PORT, "PORT", DEFAULT_PORT, 1, 65_535),
@@ -241,14 +255,80 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     providerRegistry,
     routing,
     governance,
-    cache: {
-      exactEnabled: readBoolean(
-        env.EXACT_CACHE_ENABLED,
-        "EXACT_CACHE_ENABLED",
-        DEFAULT_EXACT_CACHE_ENABLED
-      )
-    }
+    cache
   };
+}
+
+function readCacheConfig(env: NodeJS.ProcessEnv): CacheConfig {
+  const backend = readCacheBackend(env.CACHE_BACKEND);
+  const ttlSeconds = readInteger(
+    env.CACHE_TTL_SECONDS,
+    "CACHE_TTL_SECONDS",
+    DEFAULT_CACHE_TTL_SECONDS,
+    1,
+    31_536_000
+  );
+  const exactEnabled = readCacheEnabled(env);
+
+  if (backend === "postgres") {
+    return {
+      exactEnabled,
+      backend,
+      ttlSeconds,
+      postgres: {
+        databaseUrl: readPostgresUrl(env.DATABASE_URL),
+        operationTimeoutMs: readInteger(
+          env.CACHE_POSTGRES_OPERATION_TIMEOUT_MS,
+          "CACHE_POSTGRES_OPERATION_TIMEOUT_MS",
+          DEFAULT_CACHE_POSTGRES_OPERATION_TIMEOUT_MS,
+          1,
+          60_000
+        )
+      }
+    };
+  }
+
+  return {
+    exactEnabled,
+    backend,
+    ttlSeconds
+  };
+}
+
+function readCacheEnabled(env: NodeJS.ProcessEnv): boolean {
+  const cacheEnabled = env.CACHE_ENABLED?.trim();
+  const exactCacheEnabled = env.EXACT_CACHE_ENABLED?.trim();
+
+  if (cacheEnabled && exactCacheEnabled) {
+    const parsedCacheEnabled = readBoolean(cacheEnabled, "CACHE_ENABLED", DEFAULT_EXACT_CACHE_ENABLED);
+    const parsedExactCacheEnabled = readBoolean(
+      exactCacheEnabled,
+      "EXACT_CACHE_ENABLED",
+      DEFAULT_EXACT_CACHE_ENABLED
+    );
+
+    if (parsedCacheEnabled !== parsedExactCacheEnabled) {
+      throw new Error("CACHE_ENABLED and EXACT_CACHE_ENABLED must not conflict.");
+    }
+
+    return parsedCacheEnabled;
+  }
+
+  if (cacheEnabled) {
+    return readBoolean(cacheEnabled, "CACHE_ENABLED", DEFAULT_EXACT_CACHE_ENABLED);
+  }
+
+  return readBoolean(exactCacheEnabled, "EXACT_CACHE_ENABLED", DEFAULT_EXACT_CACHE_ENABLED);
+}
+
+function readCacheBackend(value: string | undefined): CacheBackend {
+  const rawValue = value?.trim() ?? DEFAULT_CACHE_BACKEND;
+
+  if (rawValue === "memory" || rawValue === "postgres") {
+    return rawValue;
+  }
+
+  throw new Error("CACHE_BACKEND must be one of memory or postgres.");
 }
 
 function validateGovernanceConfig(config: GovernanceConfig): GovernanceConfig {
@@ -307,6 +387,29 @@ function readRedisUrl(value: string | undefined): string {
     }
 
     throw new Error("REDIS_URL must be a valid Redis URL.");
+  }
+}
+
+function readPostgresUrl(value: string | undefined): string {
+  const rawValue = readRequiredString(value, "DATABASE_URL");
+
+  try {
+    const parsed = new URL(rawValue);
+
+    if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+      throw new Error("DATABASE_URL must use the postgres:// or postgresql:// scheme.");
+    }
+
+    return parsed.toString();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "DATABASE_URL must use the postgres:// or postgresql:// scheme."
+    ) {
+      throw error;
+    }
+
+    throw new Error("DATABASE_URL must be a valid Postgres URL.");
   }
 }
 

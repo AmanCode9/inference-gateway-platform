@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { ChatCompletionRequest } from "../chat/types.js";
 
 export const EXACT_CHAT_CACHE_SCHEMA_VERSION = "exact-chat-v1";
+const EXACT_CHAT_CACHE_KEY_PATTERN =
+  /^chat_completion:([^:]+):tenant:([a-f0-9]{64}):payload:([a-f0-9]{64})$/;
 
 type CanonicalJsonValue =
   | null
@@ -16,11 +18,39 @@ export interface ExactChatCacheKeyInput {
   readonly request: ChatCompletionRequest;
 }
 
+export interface ExactChatCacheKeyParts {
+  readonly cachePolicyVersion: string;
+  readonly tenantHash: string;
+  readonly requestFingerprint: string;
+  readonly exactCacheKey: string;
+}
+
 export function createExactChatCacheKey(input: ExactChatCacheKeyInput): string {
   const tenantHash = hashValue(input.apiKey);
   const payloadHash = hashValue(canonicalStringify(createExactChatCachePayload(input.request)));
 
   return `chat_completion:${EXACT_CHAT_CACHE_SCHEMA_VERSION}:tenant:${tenantHash}:payload:${payloadHash}`;
+}
+
+export function parseExactChatCacheKey(cacheKey: string): ExactChatCacheKeyParts {
+  const match = EXACT_CHAT_CACHE_KEY_PATTERN.exec(cacheKey);
+
+  if (!match) {
+    throw new Error("Invalid exact chat cache key.");
+  }
+
+  const [, cachePolicyVersion, tenantHash, requestFingerprint] = match;
+
+  if (!cachePolicyVersion || !tenantHash || !requestFingerprint) {
+    throw new Error("Invalid exact chat cache key.");
+  }
+
+  return {
+    cachePolicyVersion,
+    tenantHash,
+    requestFingerprint,
+    exactCacheKey: cacheKey
+  };
 }
 
 export function canonicalStringify(value: unknown): string {
