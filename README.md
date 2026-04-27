@@ -1,6 +1,6 @@
 # Inference Gateway Platform
 
-Inference Gateway Platform is a production-style backend portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, Redis-backed request governance with fail-closed safety, and a process-local exact cache foundation. The repository is intentionally scoped: it shows the shape of a distributed inference platform without claiming future features such as semantic caching, Kafka runtime pipelines, Kubernetes deployment, eval-backed routing, or live external provider calls.
+Inference Gateway Platform is a production-style backend portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, Redis-backed request governance with fail-closed safety, and exact cache storage that can run in memory or persist to Postgres. The repository is intentionally scoped: it shows the shape of a distributed inference platform without claiming future features such as semantic caching, Kafka runtime pipelines, Kubernetes deployment, eval-backed routing, or live external provider calls.
 
 ## What Is Implemented
 
@@ -47,6 +47,14 @@ Milestone 4A - exact cache foundation:
 - Fail-open cache read/write behavior.
 - `x-cache-status` response header with `miss`, `hit-exact`, or `bypass`.
 
+Milestone 4B - persistent exact cache storage:
+
+- Optional Postgres-backed implementation of the existing exact-cache repository boundary.
+- `exact_cache_entries` table for successful provider responses only.
+- Configurable memory or Postgres cache backend.
+- Postgres TTL enforcement on reads; expired rows behave as misses.
+- Parameterized SQL queries and tenant isolation without storing raw API keys.
+
 ## Architecture
 
 ```mermaid
@@ -56,14 +64,15 @@ flowchart LR
   RequestContext --> AuthValidation[Auth / Content-Type / JSON Validation]
   AuthValidation --> Governance[Governance Layer<br/>rate limit + quota + budget + abuse guards]
   Governance <--> Redis[(Redis<br/>Milestone 3 governance state)]
-  Governance --> ExactCache[Exact Cache Service<br/>process-local + fail-open]
-  ExactCache <--> CacheRepo[(In-memory Cache<br/>Milestone 4A only)]
+  Governance --> ExactCache[Exact Cache Service<br/>fail-open optimization]
+  ExactCache <--> MemoryCache[(In-memory Cache<br/>process-local)]
+  ExactCache <--> PostgresCache[(Postgres exact_cache_entries<br/>Milestone 4B persistent exact cache)]
   ExactCache --> ProviderExecution[Provider Execution Layer<br/>timeout + retry + fallback]
   ProviderExecution --> MockProvider[Mock Provider]
   ProviderExecution --> RealStub[Real Provider Stub<br/>no outbound API calls]
   Gateway -. placeholder .-> EvalWorker[Python Eval Worker<br/>future evaluation work]
   Gateway -. future contract only .-> Kafka[(Kafka<br/>future usage events)]
-  Gateway -. local scaffold .-> Postgres[(Postgres + pgvector<br/>no runtime writes yet)]
+  Gateway -. future semantic cache only .-> Pgvector[(pgvector<br/>no semantic lookup yet)]
 ```
 
 Current request flow:
@@ -72,7 +81,7 @@ Current request flow:
 2. Gateway creates or propagates `x-request-id`.
 3. API key authentication and JSON validation run before governance.
 4. Governance applies abuse checks, usage estimation, rate limit, daily quota, and monthly budget admission.
-5. Exact cache lookup runs if enabled; cache failures fail open.
+5. Exact cache lookup runs if enabled; the configured backend is memory or Postgres, and cache failures fail open.
 6. On an exact hit, the cached provider completion is returned with the current request ID.
 7. On a miss or bypass, provider execution runs with timeout, retry, and optional fallback.
 8. The final response is returned with the request ID and `x-cache-status`.
@@ -107,6 +116,19 @@ Start local dependencies:
 
 ```sh
 docker compose up -d
+```
+
+Apply the optional Postgres exact-cache schema when using `CACHE_BACKEND=postgres`:
+
+```sh
+psql "postgres://inference_gateway:inference_gateway_dev@localhost:5432/inference_gateway" -f infra/postgres/migrations/001_exact_cache_entries.sql
+```
+
+Run the opt-in live Postgres exact-cache repository test:
+
+```sh
+$env:POSTGRES_CACHE_TEST_DATABASE_URL="postgres://inference_gateway:inference_gateway_dev@localhost:5432/inference_gateway"
+pnpm --filter @igp/gateway test -- tests/integration/postgres-cache-live.test.ts
 ```
 
 Run the gateway locally:
@@ -164,7 +186,12 @@ Governance:
 
 Exact cache:
 
-- `EXACT_CACHE_ENABLED` - enables the Milestone 4A process-local exact cache when set to `true`; defaults to `false`.
+- `CACHE_ENABLED` - enables exact cache lookup when set to `true`; defaults to `false`.
+- `EXACT_CACHE_ENABLED` - legacy Milestone 4A alias for `CACHE_ENABLED`; if both are set, they must agree.
+- `CACHE_BACKEND` - `memory` or `postgres`; defaults to `memory`.
+- `CACHE_TTL_SECONDS` - Postgres exact-cache TTL in seconds; defaults to `86400`.
+- `DATABASE_URL` - required when `CACHE_BACKEND=postgres`.
+- `CACHE_POSTGRES_OPERATION_TIMEOUT_MS` - bounded Postgres cache operation timeout; defaults to `250`.
 
 The real-provider adapter remains a Milestone 3 stub. Selecting `real_stub` validates configuration and returns a documented not-implemented response instead of calling an external API.
 
@@ -194,16 +221,21 @@ Usage approximation:
 
 ## Exact Cache Policy
 
-- Exact cache is disabled by default and enabled with `EXACT_CACHE_ENABLED=true`.
+- Exact cache is disabled by default and enabled with `CACHE_ENABLED=true`.
+- `CACHE_BACKEND=memory` uses the process-local Milestone 4A repository.
+- `CACHE_BACKEND=postgres` uses the Milestone 4B `exact_cache_entries` table.
 - Cache lookup happens only after request ID creation, auth, content-type validation, JSON validation, and governance admission.
 - Cache hits still pass through Milestone 3 governance; cache does not change rate, quota, or budget accounting semantics.
 - Cache keys include a schema version, hashed API key/tenant identity, and a SHA-256 hash of the canonical normalized request payload.
 - The canonical payload includes all currently supported response-affecting chat request fields: `model` and ordered `messages` with `role` and `content`.
 - Object keys are sorted recursively, array order is preserved, and undefined fields are removed before hashing.
-- The in-memory cache stores successful provider responses only.
+- Cache repositories store successful provider responses only.
+- The Postgres backend stores `response_body` as JSONB plus safe metadata such as tenant hash, request fingerprint, model, provider id, cache policy version, and expiry.
+- Postgres lookups ignore rows where `expires_at <= now()`; expired entries behave as cache misses.
 - Cache read failures return `x-cache-status: bypass` and call the provider normally.
 - Cache write failures return the provider response successfully with `x-cache-status: miss`.
-- The cache is process-local and non-persistent. It is not distributed, durable, or Postgres-backed in Milestone 4A.
+- The memory backend is process-local and non-persistent.
+- The Postgres backend is persistent exact cache storage. It is not semantic caching and does not use embeddings, pgvector, or similarity search.
 
 ## Checks and CI
 
@@ -220,6 +252,8 @@ The root `test` script runs:
 - gateway unit and integration tests through Vitest
 - eval worker tests through Python `unittest`
 
+The default suite does not require Docker or a live Postgres service. The live Postgres exact-cache test is opt-in through `POSTGRES_CACHE_TEST_DATABASE_URL`.
+
 GitHub Actions runs these checks on `push` and `pull_request` to `main` using Node.js 20, pnpm, and Python 3.12.
 
 ## Roadmap
@@ -231,10 +265,11 @@ Implemented:
 - Milestone 3: Redis-backed governance with rate limits, quotas, budget tracking, abuse guards, fail-closed behavior, and idempotent admission.
 - Milestone 3.5: CI, README polish, and architecture diagram.
 - Milestone 4A: process-local exact cache foundation.
+- Milestone 4B: persistent Postgres exact cache storage.
 
 Next planned feature milestone:
 
-- Milestone 4B: persistent exact cache storage.
+- Milestone 4C: semantic caching foundation.
 
 Future milestones, not implemented yet:
 
@@ -258,7 +293,7 @@ Current production-oriented qualities:
 - Request-scoped structured logging.
 - Fail-closed governance behavior.
 - Atomic Redis Lua admission path for governance counters and idempotency.
-- Fail-open process-local exact cache path.
+- Fail-open exact cache path with memory or Postgres backend.
 - CI covering lint, typecheck, gateway tests, and eval-worker tests.
 
 Intentional boundaries:
@@ -269,4 +304,4 @@ Intentional boundaries:
 - No eval-backed routing.
 - No live external provider calls.
 - No SQL/Postgres governance persistence.
-- No distributed, durable, or Postgres-backed cache in Milestone 4A.
+- No semantic cache, embeddings, pgvector lookup, or similarity search in Milestone 4B.

@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Inference Gateway API
   version: 0.1.0
-  description: Milestone 3 gateway contract.
+  description: Gateway contract through Milestone 4B, including governed chat completions and exact-cache status headers.
 servers:
   - url: http://localhost:3000
 paths:
@@ -24,7 +24,7 @@ paths:
     post:
       summary: Create a chat completion
       operationId: createChatCompletion
-      description: Authenticates the request, validates and governs a normalized payload, and delegates to a config-selected provider execution layer with timeout, retry, and optional secondary fallback behavior. Milestone 3 adds Redis-backed per-key rate limits, daily token quotas, monthly budget enforcement, and deterministic abuse guards before provider execution. When the selected real provider is a stub, the route returns a documented `501` response instead of calling an external API.
+      description: Authenticates the request, validates and governs a normalized payload, checks the configured exact-cache backend after governance admission, and delegates cache misses to a config-selected provider execution layer with timeout, retry, and optional secondary fallback behavior. Cache failures fail open; governance failures fail closed. When the selected real provider is a stub, the route returns a documented `501` response instead of calling an external API.
       security:
         - GatewayApiKey: []
       parameters:

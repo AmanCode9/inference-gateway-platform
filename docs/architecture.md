@@ -1,13 +1,13 @@
 # Architecture
 
-## Milestone 4A Components
+## Milestone 4B Components
 
 - TypeScript gateway: owns the public HTTP surface and process-level concerns such as config, logging, and health.
 - Python eval worker: placeholder process for future evaluation work.
 - OpenAPI contract: documents the current gateway HTTP API.
 - AsyncAPI contract: records the future usage event shape without runtime Kafka logic.
 - Docker Compose: starts local Postgres with pgvector and Redis for local development.
-- Process-local exact cache: optional Milestone 4A cache for successful chat-completions responses.
+- Exact cache: optional successful-response cache with process-local memory and persistent Postgres backends.
 
 ## Gateway
 
@@ -44,7 +44,7 @@ The Milestone 3 request flow is:
 4. abuse guard rejects obviously oversized message shapes
 5. the governance service computes a deterministic request estimate
 6. an atomic Redis-backed governance admission step applies rate-limit, token-quota, and monthly-budget checks
-7. the Milestone 4A exact cache checks for a tenant-isolated payload match when enabled
+7. the exact cache checks for a tenant-isolated payload match when enabled
 8. the Milestone 2 provider execution layer runs with timeout, retry, and optional fallback on cache miss, bypass, or cache read failure
 9. the final response is returned without additional quota or budget charging
 
@@ -67,14 +67,17 @@ Deterministic approximation rules:
 - daily quota buckets reset at UTC midnight and monthly budget buckets reset at the next UTC month boundary
 - admission dedupe entries live for 24 hours independent of daily and monthly bucket resets, so retries of the same logical request remain safe across UTC rollover within that bounded window
 
-Milestone 4A adds a narrow exact-cache layer after governance and before provider execution:
+Milestones 4A and 4B add a narrow exact-cache layer after governance and before provider execution:
 
-- cache is disabled by default and enabled by `EXACT_CACHE_ENABLED=true`
+- cache is disabled by default and enabled by `CACHE_ENABLED=true`; `EXACT_CACHE_ENABLED` remains a compatible Milestone 4A alias
+- cache backend selection is explicit: `CACHE_BACKEND=memory` or `CACHE_BACKEND=postgres`
 - keys include a schema version, hashed API key/tenant identity, and the canonical normalized chat request payload
 - canonicalization sorts object keys recursively, preserves array order, removes undefined fields, and covers the current validated `model` and ordered `messages` role/content fields
 - read and write failures fail open and call or return the provider path normally
 - cache status is reported on successful chat-completions responses as `x-cache-status: miss`, `hit-exact`, or `bypass`
-- the Milestone 4A repository is process-local and non-persistent; no Postgres, pgvector, or semantic lookup is used
+- the memory repository is process-local and non-persistent
+- the Postgres repository persists exact-cache entries in `exact_cache_entries`, stores response JSONB plus safe metadata, and enforces `expires_at` on reads
+- no semantic lookup, embeddings, vector columns, or pgvector runtime path is used
 
 Milestone 2 adds a deterministic execution layer beneath the route:
 
@@ -95,12 +98,12 @@ Provider adapters available in Milestone 2:
 - mock provider for local development and failure simulation in tests
 - real-provider stub selected through environment configuration
 
-The real-provider adapter is intentionally non-functional in Milestone 3 and returns a clear not-implemented error rather than making outbound API calls.
+The real-provider adapter is intentionally non-functional and returns a clear not-implemented error rather than making outbound API calls.
 
 ## Worker
 
-The eval worker is a Python package skeleton with a placeholder entrypoint. It does not consume queues, call models, or influence routing in Milestone 3.
+The eval worker is a Python package skeleton with a placeholder entrypoint. It does not consume queues, call models, or influence routing in Milestone 4B.
 
 ## Data and Events
 
-Redis is now used only for Milestone 3 governance state: rate-limit counters, daily token counters, and monthly budget counters. Postgres and Kafka remain local scaffolding and contracts only; no application code writes to Postgres or emits Kafka messages yet.
+Redis is used for Milestone 3 governance state: rate-limit counters, daily token counters, and monthly budget counters. Postgres is used only when `CACHE_BACKEND=postgres` for Milestone 4B persistent exact cache storage. Kafka remains a contract/scaffold only; no application code emits Kafka messages yet. pgvector remains future semantic-cache infrastructure and is not used by the runtime gateway.

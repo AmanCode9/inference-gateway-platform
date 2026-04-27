@@ -203,6 +203,7 @@ describe("POST /v1/chat/completions", () => {
       model: "mock-model"
     });
     expect(body.id).toMatch(/^chatcmpl_/);
+    expect(body.id).not.toContain("req_integration_mock");
     expect(body.object).toBe("chat.completion");
     expect(typeof body.created).toBe("number");
     expect(body.choices?.[0]?.finishReason).toBe("stop");
@@ -244,6 +245,7 @@ describe("POST /v1/chat/completions", () => {
       })
     });
     const secondBody = (await secondResponse.json()) as {
+      id?: string;
       requestId?: string;
       choices?: Array<{
         message?: {
@@ -258,6 +260,9 @@ describe("POST /v1/chat/completions", () => {
     expect(secondResponse.headers.get("x-cache-status")).toBe("hit-exact");
     expect(secondResponse.headers.get("x-request-id")).toBe("req_cache_second");
     expect(secondBody.requestId).toBe("req_cache_second");
+    expect(secondBody.id).toMatch(/^chatcmpl_/);
+    expect(secondBody.id).not.toContain("req_cache_first");
+    expect(secondBody.id).not.toContain("req_cache_second");
     expect(secondBody.choices?.[0]?.message?.content).toContain("cache me");
     expect(server.metrics().providerSelected.mock).toBe(1);
     expect(server.metrics().providerSuccess.mock).toBe(1);

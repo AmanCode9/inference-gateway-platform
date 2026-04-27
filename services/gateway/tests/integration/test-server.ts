@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createChatCompletionService } from "../../src/chat/service.js";
 import { createApp } from "../../src/app.js";
-import { createInMemoryCacheRepository } from "../../src/cache/in-memory-repository.js";
+import { createConfiguredCacheRepository, type CacheRepositoryHandle } from "../../src/cache/factory.js";
 import type { CacheRepository } from "../../src/cache/repository.js";
 import { createCacheService } from "../../src/cache/service.js";
 import { loadConfig } from "../../src/config/index.js";
@@ -32,6 +32,15 @@ export async function startTestServer(
 ): Promise<TestServer> {
   const config = loadConfig(createEnv(overrides));
   const governanceStore = options.governanceStore ?? createInMemoryGovernanceStore();
+  const cacheRepositoryHandle = options.cacheRepository
+    ? undefined
+    : createConfiguredCacheRepository(config.cache);
+  const cacheRepository = options.cacheRepository ?? cacheRepositoryHandle?.repository;
+
+  if (!cacheRepository) {
+    throw new Error("Expected cache repository to be configured.");
+  }
+
   const governanceService = createGovernanceService({
     config: config.governance,
     store: governanceStore
@@ -40,7 +49,7 @@ export async function startTestServer(
   const cacheService = createCacheService({
     config: config.cache,
     metrics: cacheMetrics,
-    repository: options.cacheRepository ?? createInMemoryCacheRepository()
+    repository: cacheRepository
   });
   const metrics = createProviderMetrics();
   const providerRegistry = createProviderRegistry(config.providerRegistry);
@@ -67,7 +76,7 @@ export async function startTestServer(
 
   return {
     url: (pathname: string) => `http://127.0.0.1:${address.port}${pathname}`,
-    close: () => close(server, governanceStore),
+    close: () => close(server, governanceStore, cacheRepositoryHandle),
     metrics: () => metrics.snapshot(),
     cacheMetrics: () => cacheMetrics.snapshot()
   };
@@ -97,7 +106,6 @@ function createEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     ABUSE_MAX_MESSAGE_COUNT: "32",
     ABUSE_MAX_MESSAGE_CHARACTERS: "4000",
     ABUSE_MAX_TOTAL_MESSAGE_CHARACTERS: "12000",
-    EXACT_CACHE_ENABLED: "false",
     ...overrides
   };
 }
@@ -112,7 +120,11 @@ function listen(server: Server): Promise<void> {
   });
 }
 
-function close(server: Server, governanceStore: GovernanceStore): Promise<void> {
+function close(
+  server: Server,
+  governanceStore: GovernanceStore,
+  cacheRepositoryHandle: CacheRepositoryHandle | undefined
+): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close(async (error) => {
       if (error) {
@@ -121,7 +133,7 @@ function close(server: Server, governanceStore: GovernanceStore): Promise<void> 
       }
 
       try {
-        await governanceStore.close();
+        await Promise.all([governanceStore.close(), cacheRepositoryHandle?.close()]);
         resolve();
       } catch (closeError) {
         reject(closeError);
