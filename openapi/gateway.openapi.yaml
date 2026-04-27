@@ -101,7 +101,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "501":
-          description: The configured real provider adapter is a Milestone 3 stub and intentionally does not call an external API.
+          description: The configured real-provider stub adapter intentionally does not call an external API.
           headers:
             x-request-id:
               $ref: "#/components/headers/RequestIdHeader"

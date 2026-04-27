@@ -1357,7 +1357,8 @@ describe("POST /v1/chat/completions", () => {
         code: "provider_not_implemented"
       }
     });
-    expect(body.error?.message).toContain("Milestone 3 stub");
+    expect(body.error?.message).toContain("stub adapter");
+    expect(body.error?.message).not.toContain("Milestone");
     expect(body.error?.requestId).toBe(response.headers.get("x-request-id"));
   });
 
