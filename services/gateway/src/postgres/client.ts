@@ -10,9 +10,11 @@ export interface PostgresPoolLike extends PostgresCacheClient {
 }
 
 export function createPostgresPool(config: CachePostgresConfig): PostgresPoolLike {
+  const operationTimeoutMs = config.operationTimeoutMs;
   const pool = new Pool({
     connectionString: config.databaseUrl,
-    connectionTimeoutMillis: config.operationTimeoutMs,
+    connectionTimeoutMillis: operationTimeoutMs,
+    statement_timeout: operationTimeoutMs,
     max: 5
   });
 

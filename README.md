@@ -193,7 +193,7 @@ Exact cache:
 - `DATABASE_URL` - required when `CACHE_BACKEND=postgres`.
 - `CACHE_POSTGRES_OPERATION_TIMEOUT_MS` - bounded Postgres cache operation timeout; defaults to `250`.
 
-The real-provider adapter remains a Milestone 3 stub. Selecting `real_stub` validates configuration and returns a documented not-implemented response instead of calling an external API.
+The real-provider stub adapter does not call external APIs. Selecting `real_stub` validates configuration and returns a documented not-implemented response.
 
 ## Governance Policy
 
