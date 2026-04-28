@@ -1,8 +1,29 @@
 # Inference Gateway Platform
 
-Inference Gateway Platform is a production-style backend portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, Redis-backed request governance with fail-closed safety, exact cache storage that can run in memory or persist to Postgres, and a conservative semantic-cache layer built on deterministic mock embeddings. The repository is intentionally scoped: it shows the shape of a distributed inference platform without claiming future features such as live embedding providers, Kafka runtime pipelines, Kubernetes deployment, eval-backed routing, or live external provider calls.
+Inference Gateway Platform is a production-style backend/platform portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, Redis-backed usage governance, exact cache storage, Postgres persistence, an embedding boundary, and a conservative semantic-cache layer.
 
-## What Is Implemented
+The project exists to show the engineering shape of a serious inference gateway without pretending to be a full SaaS platform. It focuses on request safety, deterministic failure behavior, tenant isolation, clear extension boundaries, and test-backed backend design. Future systems such as live provider integrations, Kafka runtime pipelines, Kubernetes deployment, OpenTelemetry, eval-backed routing, and live embedding providers are intentionally documented as out of scope.
+
+## At A Glance
+
+- **What it is:** a TypeScript AI inference gateway with auth, validation, governance, provider execution, and caching.
+- **Why it is credible:** platform controls run before optimization paths; governance fails closed; cache fails open; tenant isolation is enforced.
+- **What it demonstrates:** backend API design, resilience patterns, Redis accounting, Postgres persistence, deterministic testing, and scoped architecture.
+- **What it does not claim:** no live LLM calls, no live embeddings, no Kafka runtime, no Kubernetes deployment, no OpenTelemetry pipeline, no pgvector runtime search.
+- **How to verify it:** run `pnpm run lint`, `pnpm run typecheck`, and `pnpm run test`.
+
+## Production-Style Qualities
+
+- Explicit startup config validation.
+- Request-scoped IDs and structured JSON errors.
+- Auth and validation before governance, and governance before cache.
+- Fail-closed Redis governance for rate/quota/budget controls.
+- Fail-open cache behavior because cache is an optimization.
+- Tenant-isolated exact and semantic cache paths.
+- Conservative semantic cache policy that prefers false misses over risky hits.
+- CI coverage for lint, typecheck, gateway tests, and eval-worker tests.
+
+## Implemented Milestones
 
 Milestone 1 - gateway foundation:
 
@@ -108,13 +129,27 @@ Current request flow:
 9. On miss, bypass, rejection, or cache error, provider execution runs with timeout, retry, and optional fallback.
 10. The final response is returned with the request ID and `x-cache-status`.
 
+## Demo Path
+
+For a quick local walkthrough:
+
+1. Install dependencies with `pnpm install`.
+2. Start local Redis/Postgres with `docker compose up -d`.
+3. Run checks with `pnpm run lint`, `pnpm run typecheck`, and `pnpm run test`.
+4. Start the gateway with the PowerShell environment variables in [docs/demo-script.md](docs/demo-script.md).
+5. Call `GET /health`, then `POST /v1/chat/completions`.
+6. Repeat the same chat request with `CACHE_ENABLED=true` to demonstrate `x-cache-status: miss` then `hit-exact`.
+7. Use the targeted semantic-cache test in the demo script to show the conservative `hit-semantic` path without relying on natural-language embedding quality from the deterministic mock provider.
+
+The fastest two-minute explanation is in [docs/recruiter-brief.md](docs/recruiter-brief.md). The design rationale is in [docs/design-decisions.md](docs/design-decisions.md).
+
 ## Repository Structure
 
 - `services/gateway/` - TypeScript HTTP gateway.
 - `workers/eval-worker/` - Python eval worker placeholder.
 - `openapi/` - gateway HTTP API contract.
 - `asyncapi/` - future usage-event contract placeholder.
-- `docs/` - product, architecture, and non-functional notes.
+- `docs/` - architecture, design decisions, demo script, recruiter brief, roadmap, and non-functional notes.
 - `infra/` - local infrastructure notes and future IaC location.
 - `dashboards/` - future Grafana dashboard assets.
 - `.github/workflows/` - GitHub Actions CI.
@@ -323,10 +358,11 @@ Implemented:
 - Milestone 4B: persistent Postgres exact cache storage.
 - Milestone 4C: embedding boundary and deterministic mock embeddings.
 - Milestone 4D: conservative semantic cache.
+- Milestone 4E: final documentation polish and project freeze.
 
 Next planned work:
 
-- Final polish and project freeze.
+- Release/tag, resume polish, and interview preparation only.
 
 Future milestones, not implemented yet:
 
