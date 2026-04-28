@@ -112,6 +112,111 @@ describe("createPostgresCacheRepository", () => {
     expect(client.queries[1]?.text).toContain("$1");
     expect(client.queries[1]?.text).not.toContain(cacheKey);
   });
+
+  it("returns tenant and model compatible semantic candidates", async () => {
+    const client = new StatefulPostgresCacheClient();
+    const repository = createRepository(client, {
+      now: () => new Date(client.nowMs)
+    });
+    const cacheKey = createCacheKey("tenant-a");
+
+    await repository.setExact(cacheKey, {
+      completion: createCompletion(),
+      semanticMetadata: {
+        tenantHash: extractTenantHash(cacheKey),
+        model: "mock-model",
+        embedding: [1, 0],
+        embeddingProvider: "mock",
+        embeddingDimensions: 2,
+        semanticPolicyVersion: "v1",
+        semanticInputHash: "semantic-input-a",
+        expiresAtMs: client.nowMs + 86_400_000
+      }
+    });
+
+    await expect(
+      repository.getSemanticCandidates({
+        tenantHash: extractTenantHash(cacheKey),
+        model: "mock-model",
+        embeddingProvider: "mock",
+        embeddingDimensions: 2,
+        semanticPolicyVersion: "v1",
+        maxCandidates: 10
+      })
+    ).resolves.toEqual([
+      {
+        completion: createCompletion(),
+        embedding: [1, 0],
+        metadata: {
+          tenantHash: extractTenantHash(cacheKey),
+          model: "mock-model",
+          embeddingProvider: "mock",
+          embeddingDimensions: 2,
+          semanticPolicyVersion: "v1",
+          semanticInputHash: "semantic-input-a",
+          expiresAtMs: client.nowMs + 86_400_000
+        }
+      }
+    ]);
+  });
+
+  it("filters semantic candidates by tenant, model, and expiry", async () => {
+    const client = new StatefulPostgresCacheClient();
+    const repository = createRepository(client, {
+      ttlSeconds: 1,
+      now: () => new Date(client.nowMs)
+    });
+    const cacheKey = createCacheKey("tenant-a");
+    const tenantHash = extractTenantHash(cacheKey);
+
+    await repository.setExact(cacheKey, {
+      completion: createCompletion(),
+      semanticMetadata: {
+        tenantHash,
+        model: "mock-model",
+        embedding: [1, 0],
+        embeddingProvider: "mock",
+        embeddingDimensions: 2,
+        semanticPolicyVersion: "v1",
+        semanticInputHash: "semantic-input-a",
+        expiresAtMs: client.nowMs + 1_000
+      }
+    });
+
+    await expect(
+      repository.getSemanticCandidates({
+        tenantHash: extractTenantHash(createCacheKey("tenant-b")),
+        model: "mock-model",
+        embeddingProvider: "mock",
+        embeddingDimensions: 2,
+        semanticPolicyVersion: "v1",
+        maxCandidates: 10
+      })
+    ).resolves.toEqual([]);
+    await expect(
+      repository.getSemanticCandidates({
+        tenantHash,
+        model: "different-model",
+        embeddingProvider: "mock",
+        embeddingDimensions: 2,
+        semanticPolicyVersion: "v1",
+        maxCandidates: 10
+      })
+    ).resolves.toEqual([]);
+
+    client.nowMs += 1_001;
+
+    await expect(
+      repository.getSemanticCandidates({
+        tenantHash,
+        model: "mock-model",
+        embeddingProvider: "mock",
+        embeddingDimensions: 2,
+        semanticPolicyVersion: "v1",
+        maxCandidates: 10
+      })
+    ).resolves.toEqual([]);
+  });
 });
 
 interface StoredRecord {
@@ -124,6 +229,12 @@ interface StoredRecord {
   readonly requestFingerprint: string;
   readonly cachePolicyVersion: string;
   readonly hitCount: number;
+  readonly semanticInputHash?: string;
+  readonly semanticEmbedding?: readonly number[];
+  readonly embeddingProvider?: string;
+  readonly embeddingDimensions?: number;
+  readonly semanticPolicyVersion?: string;
+  readonly systemPromptHash?: string;
 }
 
 class StatefulPostgresCacheClient implements PostgresCacheClient {
@@ -148,6 +259,10 @@ class StatefulPostgresCacheClient implements PostgresCacheClient {
       return this.get<Row>(values);
     }
 
+    if (text.includes("SELECT") && text.includes("semantic_cache_eligible")) {
+      return this.getSemanticCandidates<Row>(values);
+    }
+
     throw new Error("Unexpected query.");
   }
 
@@ -165,6 +280,13 @@ class StatefulPostgresCacheClient implements PostgresCacheClient {
       throw new Error("Expected expires_at to be a Date.");
     }
 
+    const semanticInputHash = values.length > 8 ? readString(values[8]) : undefined;
+    const semanticEmbedding = values.length > 9 ? parseEmbeddingJson(values[9]) : undefined;
+    const embeddingProvider = values.length > 10 ? readString(values[10]) : undefined;
+    const embeddingDimensions = values.length > 11 ? readNumber(values[11]) : undefined;
+    const semanticPolicyVersion = values.length > 12 ? readString(values[12]) : undefined;
+    const systemPromptHash = values.length > 13 && values[13] !== null ? readString(values[13]) : undefined;
+
     this.records.set(recordKey(tenantHash, exactCacheKey), {
       tenantHash,
       exactCacheKey,
@@ -174,7 +296,13 @@ class StatefulPostgresCacheClient implements PostgresCacheClient {
       providerId,
       requestFingerprint,
       cachePolicyVersion,
-      hitCount: 0
+      hitCount: 0,
+      ...(semanticInputHash ? { semanticInputHash } : {}),
+      ...(semanticEmbedding ? { semanticEmbedding } : {}),
+      ...(embeddingProvider ? { embeddingProvider } : {}),
+      ...(embeddingDimensions ? { embeddingDimensions } : {}),
+      ...(semanticPolicyVersion ? { semanticPolicyVersion } : {}),
+      ...(systemPromptHash ? { systemPromptHash } : {})
     });
 
     return {
@@ -204,6 +332,50 @@ class StatefulPostgresCacheClient implements PostgresCacheClient {
     return {
       rows: [{ response_body: nextRecord.responseBody } as Row],
       rowCount: 1
+    };
+  }
+
+  private getSemanticCandidates<Row>(values: readonly unknown[]): PostgresQueryResult<Row> {
+    const tenantHash = readString(values[0]);
+    const model = readString(values[1]);
+    const embeddingProvider = readString(values[2]);
+    const embeddingDimensions = readNumber(values[3]);
+    const semanticPolicyVersion = readString(values[4]);
+    const systemPromptHash = values[5] === null ? undefined : readString(values[5]);
+    const maxCandidates = readNumber(values[6]);
+    const rows: Row[] = [];
+
+    for (const record of this.records.values()) {
+      if (
+        record.tenantHash !== tenantHash ||
+        record.model !== model ||
+        record.embeddingProvider !== embeddingProvider ||
+        record.embeddingDimensions !== embeddingDimensions ||
+        record.semanticPolicyVersion !== semanticPolicyVersion ||
+        record.systemPromptHash !== systemPromptHash ||
+        !record.semanticEmbedding ||
+        !record.semanticInputHash ||
+        record.expiresAtMs <= this.nowMs
+      ) {
+        continue;
+      }
+
+      rows.push({
+        response_body: record.responseBody,
+        semantic_embedding: record.semanticEmbedding,
+        semantic_input_hash: record.semanticInputHash,
+        system_prompt_hash: record.systemPromptHash ?? null,
+        expires_at: new Date(record.expiresAtMs)
+      } as Row);
+
+      if (rows.length >= maxCandidates) {
+        break;
+      }
+    }
+
+    return {
+      rows,
+      rowCount: rows.length
     };
   }
 }
@@ -274,6 +446,34 @@ function readString(value: unknown): string {
   return value;
 }
 
+function readNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("Expected number query value.");
+  }
+
+  return value;
+}
+
+function parseEmbeddingJson(value: unknown): readonly number[] {
+  const parsed = JSON.parse(readString(value)) as unknown;
+
+  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "number" || !Number.isFinite(entry))) {
+    throw new Error("Expected semantic embedding JSON array.");
+  }
+
+  return parsed;
+}
+
 function recordKey(tenantHash: string, exactCacheKey: string): string {
   return `${tenantHash}:${exactCacheKey}`;
+}
+
+function extractTenantHash(cacheKey: string): string {
+  const match = /tenant:([a-f0-9]{64}):payload:/.exec(cacheKey);
+
+  if (!match?.[1]) {
+    throw new Error("Expected tenant hash in cache key.");
+  }
+
+  return match[1];
 }

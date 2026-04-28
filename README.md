@@ -1,6 +1,6 @@
 # Inference Gateway Platform
 
-Inference Gateway Platform is a production-style backend portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, Redis-backed request governance with fail-closed safety, and exact cache storage that can run in memory or persist to Postgres. The repository is intentionally scoped: it shows the shape of a distributed inference platform without claiming future features such as semantic caching, Kafka runtime pipelines, Kubernetes deployment, eval-backed routing, or live external provider calls.
+Inference Gateway Platform is a production-style backend portfolio project for an AI inference gateway. It demonstrates a strict TypeScript HTTP gateway, authenticated chat-completions API surface, deterministic provider routing, timeout/retry/fallback behavior, Redis-backed request governance with fail-closed safety, exact cache storage that can run in memory or persist to Postgres, and a conservative semantic-cache layer built on deterministic mock embeddings. The repository is intentionally scoped: it shows the shape of a distributed inference platform without claiming future features such as live embedding providers, Kafka runtime pipelines, Kubernetes deployment, eval-backed routing, or live external provider calls.
 
 ## What Is Implemented
 
@@ -63,6 +63,15 @@ Milestone 4C - embedding boundary foundation:
 - Disabled-by-default embedding configuration.
 - No semantic cache lookup, pgvector runtime query, or embedding persistence.
 
+Milestone 4D - conservative semantic cache:
+
+- Semantic cache lookup after exact cache miss only.
+- Disabled-by-default semantic cache configuration with a strict similarity threshold.
+- Conservative eligibility policy that rejects freshness-sensitive, context-dependent, sensitive, and multi-turn prompts.
+- Tenant-isolated, model-compatible semantic hits using deterministic mock embeddings.
+- Fail-open semantic read/write/embedding behavior.
+- `x-cache-status: hit-semantic` only when all safety checks pass.
+
 ## Architecture
 
 ```mermaid
@@ -74,14 +83,16 @@ flowchart LR
   Governance <--> Redis[(Redis<br/>Milestone 3 governance state)]
   Governance --> ExactCache[Exact Cache Service<br/>fail-open optimization]
   ExactCache <--> MemoryCache[(In-memory Cache<br/>process-local)]
-  ExactCache <--> PostgresCache[(Postgres exact_cache_entries<br/>Milestone 4B persistent exact cache)]
-  ExactCache --> ProviderExecution[Provider Execution Layer<br/>timeout + retry + fallback]
+  ExactCache <--> PostgresCache[(Postgres exact_cache_entries<br/>exact + semantic metadata)]
+  ExactCache --> SemanticCache[Conservative Semantic Cache<br/>exact miss only]
+  SemanticCache <--> EmbeddingBoundary[Embedding Boundary<br/>deterministic mock embeddings]
+  SemanticCache --> ProviderExecution[Provider Execution Layer<br/>timeout + retry + fallback]
+  ExactCache --> ProviderExecution
   ProviderExecution --> MockProvider[Mock Provider]
   ProviderExecution --> RealStub[Real Provider Stub<br/>no outbound API calls]
-  Gateway -. foundation only .-> EmbeddingBoundary[Embedding Boundary<br/>deterministic mock embeddings]
   Gateway -. placeholder .-> EvalWorker[Python Eval Worker<br/>future evaluation work]
   Gateway -. future contract only .-> Kafka[(Kafka<br/>future usage events)]
-  EmbeddingBoundary -. future semantic cache only .-> Pgvector[(pgvector<br/>no semantic lookup yet)]
+  EmbeddingBoundary -. future vector search only .-> Pgvector[(pgvector<br/>not used at runtime)]
 ```
 
 Current request flow:
@@ -92,8 +103,10 @@ Current request flow:
 4. Governance applies abuse checks, usage estimation, rate limit, daily quota, and monthly budget admission.
 5. Exact cache lookup runs if enabled; the configured backend is memory or Postgres, and cache failures fail open.
 6. On an exact hit, the cached provider completion is returned with the current request ID.
-7. On a miss or bypass, provider execution runs with timeout, retry, and optional fallback.
-8. The final response is returned with the request ID and `x-cache-status`.
+7. On exact miss, semantic cache may run only when explicitly enabled and policy-eligible.
+8. On semantic hit, a tenant/model-compatible cached completion is returned with the current request ID.
+9. On miss, bypass, rejection, or cache error, provider execution runs with timeout, retry, and optional fallback.
+10. The final response is returned with the request ID and `x-cache-status`.
 
 ## Repository Structure
 
@@ -131,6 +144,7 @@ Apply the optional Postgres exact-cache schema when using `CACHE_BACKEND=postgre
 
 ```sh
 psql "postgres://inference_gateway:inference_gateway_dev@localhost:5432/inference_gateway" -f infra/postgres/migrations/001_exact_cache_entries.sql
+psql "postgres://inference_gateway:inference_gateway_dev@localhost:5432/inference_gateway" -f infra/postgres/migrations/002_semantic_cache_metadata.sql
 ```
 
 Run the opt-in live Postgres exact-cache repository test:
@@ -207,6 +221,14 @@ Embedding foundation:
 - `EMBEDDING_PROVIDER` - `disabled` or `mock`; defaults to `disabled`.
 - `EMBEDDING_DIMENSIONS` - deterministic mock embedding dimensions; defaults to `384`.
 
+Semantic cache:
+
+- `SEMANTIC_CACHE_ENABLED` - enables conservative semantic lookup after exact miss; defaults to `false`.
+- `SEMANTIC_CACHE_THRESHOLD` - cosine similarity threshold; defaults to `0.97`.
+- `SEMANTIC_CACHE_MAX_CANDIDATES` - bounded candidate count for tenant/model-filtered lookup; defaults to `10`.
+- `SEMANTIC_CACHE_POLICY_VERSION` - semantic compatibility policy version; defaults to `v1`.
+- Semantic cache requires `CACHE_ENABLED=true` and `EMBEDDING_PROVIDER=mock`.
+
 The real-provider stub adapter does not call external APIs. Selecting `real_stub` validates configuration and returns a documented not-implemented response.
 
 ## Governance Policy
@@ -249,16 +271,26 @@ Usage approximation:
 - Cache read failures return `x-cache-status: bypass` and call the provider normally.
 - Cache write failures return the provider response successfully with `x-cache-status: miss`.
 - The memory backend is process-local and non-persistent.
-- The Postgres backend is persistent exact cache storage. It is not semantic caching and does not use embeddings, pgvector, or similarity search.
+- The Postgres backend is persistent exact cache storage with optional semantic metadata. It does not use pgvector or ANN/vector-index lookup.
 
 ## Embedding Foundation Policy
 
-- Embeddings are disabled by default and are not generated in the chat-completions runtime path in Milestone 4C.
+- Embeddings are disabled by default and are generated in the chat-completions runtime path only when semantic cache is explicitly enabled.
 - The embedding boundary is provider-agnostic and async so future real embedding providers can fit behind it.
 - The deterministic mock provider is local-only, hash-based, and makes no network calls.
 - Embedding input is built from the validated chat payload's ordered messages with role and content.
 - Embedding input excludes API keys, tenant data, request IDs, headers, exact cache keys, governance metadata, and provider routing metadata.
-- No semantic cache lookup, similarity threshold, pgvector runtime query, or embedding storage exists yet.
+- No live embedding provider, pgvector runtime query, or external embedding API exists.
+
+## Semantic Cache Policy
+
+- Semantic cache is disabled by default and runs only after an exact cache miss.
+- Semantic hits require the same hashed tenant identity, same model, same embedding provider, same embedding dimensions, same policy version, compatible system prompt hash, and similarity at or above the configured threshold.
+- The eligibility policy is intentionally conservative. It rejects assistant-history/multi-turn requests and prompts with obvious freshness, sensitive-data, attachment, prior-context, legal, medical, or financial indicators.
+- False misses are preferred over risky false hits.
+- Semantic cache failures fail open: embedding errors, repository read errors, invalid candidates, and write errors call or return the provider path normally.
+- Semantic hits return `x-cache-status: hit-semantic`. Similarity scores, embeddings, cache keys, and tenant hashes are not exposed.
+- Semantic metadata may be stored in Postgres as JSONB for bounded candidate comparison in TypeScript. pgvector is not used for runtime lookup in Milestone 4D.
 
 ## Checks and CI
 
@@ -290,14 +322,15 @@ Implemented:
 - Milestone 4A: process-local exact cache foundation.
 - Milestone 4B: persistent Postgres exact cache storage.
 - Milestone 4C: embedding boundary and deterministic mock embeddings.
+- Milestone 4D: conservative semantic cache.
 
-Next planned feature milestone:
+Next planned work:
 
-- Milestone 4D: semantic cache lookup.
+- Final polish and project freeze.
 
 Future milestones, not implemented yet:
 
-- Semantic caching.
+- Live embedding providers.
 - Kafka usage event pipeline.
 - Kubernetes manifests.
 - Eval-backed routing.
@@ -318,14 +351,15 @@ Current production-oriented qualities:
 - Fail-closed governance behavior.
 - Atomic Redis Lua admission path for governance counters and idempotency.
 - Fail-open exact cache path with memory or Postgres backend.
+- Conservative fail-open semantic cache path disabled by default.
 - CI covering lint, typecheck, gateway tests, and eval-worker tests.
 
 Intentional boundaries:
 
-- No semantic caching.
+- No live embedding provider.
 - No Kafka runtime producer or consumer logic.
 - No Kubernetes manifests.
 - No eval-backed routing.
 - No live external provider calls.
 - No SQL/Postgres governance persistence.
-- No semantic cache lookup, pgvector runtime query, or similarity search in Milestone 4C.
+- No pgvector runtime query or ANN/vector-index semantic search.

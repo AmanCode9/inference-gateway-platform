@@ -3,6 +3,8 @@ import { createApp, startServer } from "./app.js";
 import { createConfiguredCacheRepository } from "./cache/factory.js";
 import { createCacheService } from "./cache/service.js";
 import { loadConfig } from "./config/index.js";
+import { createConfiguredEmbeddingProvider } from "./embeddings/factory.js";
+import { createEmbeddingService } from "./embeddings/embedding-service.js";
 import { createGovernanceService } from "./governance/service.js";
 import { createRedisGovernanceStore } from "./governance/redis-store.js";
 import { createLogger } from "./logging/logger.js";
@@ -38,10 +40,12 @@ async function bootstrap(): Promise<void> {
   });
   const cacheMetrics = createCacheMetrics();
   const cacheRepositoryHandle = createConfiguredCacheRepository(config.cache);
+  const embeddingProvider = createConfiguredEmbeddingProvider(config.embedding);
   const cacheService = createCacheService({
     config: config.cache,
     metrics: cacheMetrics,
-    repository: cacheRepositoryHandle.repository
+    repository: cacheRepositoryHandle.repository,
+    ...(embeddingProvider ? { embeddingService: createEmbeddingService(embeddingProvider) } : {})
   });
   const metrics = createProviderMetrics();
   const providerRegistry = createProviderRegistry(config.providerRegistry);

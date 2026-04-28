@@ -81,12 +81,20 @@ export interface CacheConfig {
   readonly exactEnabled: boolean;
   readonly backend: CacheBackend;
   readonly ttlSeconds: number;
+  readonly semantic: SemanticCacheConfig;
   readonly postgres?: CachePostgresConfig;
 }
 
 export interface CachePostgresConfig {
   readonly databaseUrl: string;
   readonly operationTimeoutMs: number;
+}
+
+export interface SemanticCacheConfig {
+  readonly enabled: boolean;
+  readonly threshold: number;
+  readonly maxCandidates: number;
+  readonly policyVersion: string;
 }
 
 export interface EmbeddingConfig {
@@ -120,6 +128,10 @@ const DEFAULT_CACHE_TTL_SECONDS = 86_400;
 const DEFAULT_CACHE_POSTGRES_OPERATION_TIMEOUT_MS = 250;
 const DEFAULT_EMBEDDING_PROVIDER: EmbeddingProviderKind = "disabled";
 const DEFAULT_EMBEDDING_DIMENSIONS = 384;
+const DEFAULT_SEMANTIC_CACHE_ENABLED = false;
+const DEFAULT_SEMANTIC_CACHE_THRESHOLD = 0.97;
+const DEFAULT_SEMANTIC_CACHE_MAX_CANDIDATES = 10;
+const DEFAULT_SEMANTIC_CACHE_POLICY_VERSION = "v1";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const primaryProviderConfig = readProviderConfig(env, "PRIMARY", {
@@ -245,8 +257,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     }
   });
 
-  const cache = readCacheConfig(env);
   const embedding = readEmbeddingConfig(env);
+  const cache = validateCacheConfig(readCacheConfig(env), embedding);
 
   return {
     nodeEnv: readString(env.NODE_ENV, "development"),
@@ -280,12 +292,14 @@ function readCacheConfig(env: NodeJS.ProcessEnv): CacheConfig {
     31_536_000
   );
   const exactEnabled = readCacheEnabled(env);
+  const semantic = readSemanticCacheConfig(env);
 
   if (backend === "postgres") {
     return {
       exactEnabled,
       backend,
       ttlSeconds,
+      semantic,
       postgres: {
         databaseUrl: readPostgresUrl(env.DATABASE_URL),
         operationTimeoutMs: readInteger(
@@ -302,7 +316,29 @@ function readCacheConfig(env: NodeJS.ProcessEnv): CacheConfig {
   return {
     exactEnabled,
     backend,
-    ttlSeconds
+    ttlSeconds,
+    semantic
+  };
+}
+
+function readSemanticCacheConfig(env: NodeJS.ProcessEnv): SemanticCacheConfig {
+  return {
+    enabled: readBoolean(env.SEMANTIC_CACHE_ENABLED, "SEMANTIC_CACHE_ENABLED", DEFAULT_SEMANTIC_CACHE_ENABLED),
+    threshold: readNumber(
+      env.SEMANTIC_CACHE_THRESHOLD,
+      "SEMANTIC_CACHE_THRESHOLD",
+      DEFAULT_SEMANTIC_CACHE_THRESHOLD,
+      0,
+      1
+    ),
+    maxCandidates: readInteger(
+      env.SEMANTIC_CACHE_MAX_CANDIDATES,
+      "SEMANTIC_CACHE_MAX_CANDIDATES",
+      DEFAULT_SEMANTIC_CACHE_MAX_CANDIDATES,
+      1,
+      100
+    ),
+    policyVersion: readSemanticPolicyVersion(env.SEMANTIC_CACHE_POLICY_VERSION)
   };
 }
 
@@ -363,6 +399,18 @@ function readEmbeddingProvider(value: string | undefined): EmbeddingProviderKind
   }
 
   throw new Error("EMBEDDING_PROVIDER must be one of disabled or mock.");
+}
+
+function validateCacheConfig(config: CacheConfig, embedding: EmbeddingConfig): CacheConfig {
+  if (config.semantic.enabled && !config.exactEnabled) {
+    throw new Error("SEMANTIC_CACHE_ENABLED requires CACHE_ENABLED to be true.");
+  }
+
+  if (config.semantic.enabled && embedding.provider === "disabled") {
+    throw new Error("SEMANTIC_CACHE_ENABLED requires EMBEDDING_PROVIDER=mock.");
+  }
+
+  return config;
 }
 
 function validateGovernanceConfig(config: GovernanceConfig): GovernanceConfig {
@@ -469,6 +517,28 @@ function readInteger(
   return parsed;
 }
 
+function readNumber(
+  value: string | undefined,
+  name: string,
+  fallback: number,
+  minExclusive: number,
+  maxInclusive: number
+): number {
+  const rawValue = value?.trim();
+
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const parsed = Number(rawValue);
+
+  if (!Number.isFinite(parsed) || parsed <= minExclusive || parsed > maxInclusive) {
+    throw new Error(`${name} must be greater than ${minExclusive} and less than or equal to ${maxInclusive}.`);
+  }
+
+  return parsed;
+}
+
 function readBoolean(value: string | undefined, name: string, fallback: boolean): boolean {
   const rawValue = value?.trim().toLowerCase();
 
@@ -505,6 +575,16 @@ function readProviderKind(value: string | undefined, name = "PROVIDER_KIND"): Pr
   }
 
   throw new Error(`${name} must be one of mock or real_stub.`);
+}
+
+function readSemanticPolicyVersion(value: string | undefined): string {
+  const policyVersion = readString(value, DEFAULT_SEMANTIC_CACHE_POLICY_VERSION);
+
+  if (policyVersion.includes(",")) {
+    throw new Error("SEMANTIC_CACHE_POLICY_VERSION must not contain commas.");
+  }
+
+  return policyVersion;
 }
 
 function readProviderConfig(

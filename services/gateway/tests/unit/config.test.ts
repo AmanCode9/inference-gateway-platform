@@ -43,7 +43,13 @@ describe("loadConfig", () => {
     expect(config.cache).toEqual({
       exactEnabled: false,
       backend: "memory",
-      ttlSeconds: 86_400
+      ttlSeconds: 86_400,
+      semantic: {
+        enabled: false,
+        threshold: 0.97,
+        maxCandidates: 10,
+        policyVersion: "v1"
+      }
     });
     expect(config.embedding).toEqual({
       provider: "disabled",
@@ -168,6 +174,12 @@ describe("loadConfig", () => {
       exactEnabled: true,
       backend: "postgres",
       ttlSeconds: 3_600,
+      semantic: {
+        enabled: false,
+        threshold: 0.97,
+        maxCandidates: 10,
+        policyVersion: "v1"
+      },
       postgres: {
         databaseUrl: "postgres://user:pass@localhost:5432/inference_gateway",
         operationTimeoutMs: 125
@@ -270,6 +282,74 @@ describe("loadConfig", () => {
           EMBEDDING_DIMENSIONS: dimensions
         })
       ).toThrow("EMBEDDING_DIMENSIONS must be an integer");
+    }
+  });
+
+  it("loads conservative semantic cache configuration", () => {
+    const config = loadConfig({
+      GATEWAY_API_KEY: "test-key",
+      REDIS_URL: "redis://localhost:6379",
+      CACHE_ENABLED: "true",
+      EMBEDDING_PROVIDER: "mock",
+      SEMANTIC_CACHE_ENABLED: "true",
+      SEMANTIC_CACHE_THRESHOLD: "0.99",
+      SEMANTIC_CACHE_MAX_CANDIDATES: "5",
+      SEMANTIC_CACHE_POLICY_VERSION: "v2"
+    });
+
+    expect(config.cache.semantic).toEqual({
+      enabled: true,
+      threshold: 0.99,
+      maxCandidates: 5,
+      policyVersion: "v2"
+    });
+  });
+
+  it("requires exact cache and mock embeddings for semantic cache", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true"
+      })
+    ).toThrow("SEMANTIC_CACHE_ENABLED requires CACHE_ENABLED to be true.");
+
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        CACHE_ENABLED: "true",
+        SEMANTIC_CACHE_ENABLED: "true"
+      })
+    ).toThrow("SEMANTIC_CACHE_ENABLED requires EMBEDDING_PROVIDER=mock.");
+  });
+
+  it("rejects invalid semantic cache settings", () => {
+    for (const threshold of ["0", "-0.1", "1.1", "NaN"]) {
+      expect(() =>
+        loadConfig({
+          GATEWAY_API_KEY: "test-key",
+          REDIS_URL: "redis://localhost:6379",
+          CACHE_ENABLED: "true",
+          EMBEDDING_PROVIDER: "mock",
+          SEMANTIC_CACHE_ENABLED: "true",
+          SEMANTIC_CACHE_THRESHOLD: threshold
+        })
+      ).toThrow("SEMANTIC_CACHE_THRESHOLD must be greater than 0 and less than or equal to 1.");
+    }
+
+    for (const maxCandidates of ["0", "-1", "1.5", "NaN"]) {
+      expect(() =>
+        loadConfig({
+          GATEWAY_API_KEY: "test-key",
+          REDIS_URL: "redis://localhost:6379",
+          CACHE_ENABLED: "true",
+          EMBEDDING_PROVIDER: "mock",
+          SEMANTIC_CACHE_ENABLED: "true",
+          SEMANTIC_CACHE_MAX_CANDIDATES: maxCandidates
+        })
+      ).toThrow("SEMANTIC_CACHE_MAX_CANDIDATES must be an integer");
     }
   });
 });
