@@ -23,13 +23,15 @@ Current stack:
 - Keep the code production-oriented, not tutorial-style.
 
 ## Current milestone
-Milestones 1, 2, 3, 3.5, 4A, 4B, 4C, and 4D are implemented.
+Milestones 1, 2, 3, 3.5, 4A, 4B, 4C, 4D, and 4E are implemented.
 
 The current frozen feature milestone is Milestone 4D: conservative semantic cache.
+Milestone 4E is final documentation polish and project freeze.
 Milestone 3.5 is a documentation and CI quality milestone only.
 
 Next planned work:
-- final polish and project freeze
+- release/tag, resume polish, and interview preparation only
+- no new major runtime systems without starting a new project phase
 
 Allowed:
 - repo scaffolding
@@ -47,6 +49,7 @@ Allowed:
 - persistent Postgres-backed exact cache storage with TTL enforcement and no raw API-key storage
 - embedding provider boundary, deterministic mock embeddings, and stable chat-completion embedding input builder
 - conservative semantic cache lookup after exact cache miss, with tenant/model compatibility, strict thresholding, fail-open behavior, and no live embedding provider
+- final portfolio documentation: design decisions, demo script, recruiter brief, future roadmap, and project freeze wording
 
 Not allowed yet:
 - live embedding provider integration
@@ -55,6 +58,7 @@ Not allowed yet:
 - Kubernetes manifests
 - eval-backed routing
 - live external provider integration
+- additional major runtime systems without a new project phase
 
 ## Code standards
 - Use strict TypeScript.
