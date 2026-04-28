@@ -1,6 +1,7 @@
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type ProviderKind = "mock" | "real_stub";
 export type CacheBackend = "memory" | "postgres";
+export type EmbeddingProviderKind = "disabled" | "mock";
 export type MockProviderBehavior =
   | "success"
   | "retryable_failure"
@@ -20,6 +21,7 @@ interface GatewayConfigBase {
   readonly routing: ProviderRoutingConfig;
   readonly governance: GovernanceConfig;
   readonly cache: CacheConfig;
+  readonly embedding: EmbeddingConfig;
 }
 
 export interface ProviderRoutingConfig {
@@ -87,6 +89,11 @@ export interface CachePostgresConfig {
   readonly operationTimeoutMs: number;
 }
 
+export interface EmbeddingConfig {
+  readonly provider: EmbeddingProviderKind;
+  readonly dimensions: number;
+}
+
 export type ProviderConfig = MockProviderConfig | RealStubProviderConfig;
 export type GatewayConfig = GatewayConfigBase;
 
@@ -111,6 +118,8 @@ const DEFAULT_EXACT_CACHE_ENABLED = false;
 const DEFAULT_CACHE_BACKEND: CacheBackend = "memory";
 const DEFAULT_CACHE_TTL_SECONDS = 86_400;
 const DEFAULT_CACHE_POSTGRES_OPERATION_TIMEOUT_MS = 250;
+const DEFAULT_EMBEDDING_PROVIDER: EmbeddingProviderKind = "disabled";
+const DEFAULT_EMBEDDING_DIMENSIONS = 384;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const primaryProviderConfig = readProviderConfig(env, "PRIMARY", {
@@ -237,6 +246,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
   });
 
   const cache = readCacheConfig(env);
+  const embedding = readEmbeddingConfig(env);
 
   return {
     nodeEnv: readString(env.NODE_ENV, "development"),
@@ -255,7 +265,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     providerRegistry,
     routing,
     governance,
-    cache
+    cache,
+    embedding
   };
 }
 
@@ -329,6 +340,29 @@ function readCacheBackend(value: string | undefined): CacheBackend {
   }
 
   throw new Error("CACHE_BACKEND must be one of memory or postgres.");
+}
+
+function readEmbeddingConfig(env: NodeJS.ProcessEnv): EmbeddingConfig {
+  return {
+    provider: readEmbeddingProvider(env.EMBEDDING_PROVIDER),
+    dimensions: readInteger(
+      env.EMBEDDING_DIMENSIONS,
+      "EMBEDDING_DIMENSIONS",
+      DEFAULT_EMBEDDING_DIMENSIONS,
+      1,
+      100_000
+    )
+  };
+}
+
+function readEmbeddingProvider(value: string | undefined): EmbeddingProviderKind {
+  const rawValue = value?.trim() ?? DEFAULT_EMBEDDING_PROVIDER;
+
+  if (rawValue === "disabled" || rawValue === "mock") {
+    return rawValue;
+  }
+
+  throw new Error("EMBEDDING_PROVIDER must be one of disabled or mock.");
 }
 
 function validateGovernanceConfig(config: GovernanceConfig): GovernanceConfig {

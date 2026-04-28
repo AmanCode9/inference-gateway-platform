@@ -1,6 +1,6 @@
 # Architecture
 
-## Milestone 4B Components
+## Milestone 4C Components
 
 - TypeScript gateway: owns the public HTTP surface and process-level concerns such as config, logging, and health.
 - Python eval worker: placeholder process for future evaluation work.
@@ -8,6 +8,7 @@
 - AsyncAPI contract: records the future usage event shape without runtime Kafka logic.
 - Docker Compose: starts local Postgres with pgvector and Redis for local development.
 - Exact cache: optional successful-response cache with process-local memory and persistent Postgres backends.
+- Embedding boundary: provider interface, deterministic mock embeddings, and stable chat-completion embedding input builder for future semantic-cache work.
 
 ## Gateway
 
@@ -79,6 +80,15 @@ Milestones 4A and 4B add a narrow exact-cache layer after governance and before 
 - the Postgres repository persists exact-cache entries in `exact_cache_entries`, stores response JSONB plus safe metadata, and enforces `expires_at` on reads
 - no semantic lookup, embeddings, vector columns, or pgvector runtime path is used
 
+Milestone 4C adds an embedding foundation outside the chat-completions runtime path:
+
+- `EMBEDDING_PROVIDER=disabled` is the default, so current request behavior is unchanged
+- `EMBEDDING_PROVIDER=mock` selects a deterministic local provider with configurable dimensions
+- the embedding input builder uses the validated chat request's ordered messages with role and content
+- embedding input excludes request IDs, API keys, tenant hashes, exact cache keys, headers, governance metadata, and provider routing metadata
+- embeddings are not stored in Postgres and are not used for cache lookup yet
+- no semantic thresholding, cosine similarity runtime path, vector columns, or pgvector query is present
+
 Milestone 2 adds a deterministic execution layer beneath the route:
 
 - provider registry built from environment-configured provider definitions
@@ -102,7 +112,7 @@ The real-provider adapter is intentionally non-functional and returns a clear no
 
 ## Worker
 
-The eval worker is a Python package skeleton with a placeholder entrypoint. It does not consume queues, call models, or influence routing in Milestone 4B.
+The eval worker is a Python package skeleton with a placeholder entrypoint. It does not consume queues, call models, or influence routing in Milestone 4C.
 
 ## Data and Events
 
