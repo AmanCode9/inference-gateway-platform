@@ -48,7 +48,13 @@ function createMemoryConfig(): CacheConfig {
   return {
     exactEnabled: true,
     backend: "memory",
-    ttlSeconds: 86_400
+    ttlSeconds: 86_400,
+    semantic: {
+      enabled: false,
+      threshold: 0.97,
+      maxCandidates: 10,
+      policyVersion: "v1"
+    }
   };
 }
 
@@ -57,6 +63,12 @@ function createPostgresConfig(): CacheConfig & { readonly postgres: CachePostgre
     exactEnabled: true,
     backend: "postgres",
     ttlSeconds: 86_400,
+    semantic: {
+      enabled: false,
+      threshold: 0.97,
+      maxCandidates: 10,
+      policyVersion: "v1"
+    },
     postgres: {
       databaseUrl: "postgres://user:pass@localhost:5432/inference_gateway",
       operationTimeoutMs: 100

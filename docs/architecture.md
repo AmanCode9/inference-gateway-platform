@@ -1,6 +1,6 @@
 # Architecture
 
-## Milestone 4C Components
+## Milestone 4D Components
 
 - TypeScript gateway: owns the public HTTP surface and process-level concerns such as config, logging, and health.
 - Python eval worker: placeholder process for future evaluation work.
@@ -8,7 +8,8 @@
 - AsyncAPI contract: records the future usage event shape without runtime Kafka logic.
 - Docker Compose: starts local Postgres with pgvector and Redis for local development.
 - Exact cache: optional successful-response cache with process-local memory and persistent Postgres backends.
-- Embedding boundary: provider interface, deterministic mock embeddings, and stable chat-completion embedding input builder for future semantic-cache work.
+- Embedding boundary: provider interface, deterministic mock embeddings, and stable chat-completion embedding input builder used by the semantic cache.
+- Conservative semantic cache: disabled-by-default lookup after exact cache miss, with strict eligibility and tenant/model compatibility checks.
 
 ## Gateway
 
@@ -46,8 +47,9 @@ The Milestone 3 request flow is:
 5. the governance service computes a deterministic request estimate
 6. an atomic Redis-backed governance admission step applies rate-limit, token-quota, and monthly-budget checks
 7. the exact cache checks for a tenant-isolated payload match when enabled
-8. the Milestone 2 provider execution layer runs with timeout, retry, and optional fallback on cache miss, bypass, or cache read failure
-9. the final response is returned without additional quota or budget charging
+8. after exact miss only, the semantic cache may run when explicitly enabled and policy-eligible
+9. the Milestone 2 provider execution layer runs with timeout, retry, and optional fallback on cache miss, bypass, rejection, or cache read failure
+10. the final response is returned without additional quota or budget charging
 
 Chosen governance and accounting policy:
 
@@ -75,19 +77,30 @@ Milestones 4A and 4B add a narrow exact-cache layer after governance and before 
 - keys include a schema version, hashed API key/tenant identity, and the canonical normalized chat request payload
 - canonicalization sorts object keys recursively, preserves array order, removes undefined fields, and covers the current validated `model` and ordered `messages` role/content fields
 - read and write failures fail open and call or return the provider path normally
-- cache status is reported on successful chat-completions responses as `x-cache-status: miss`, `hit-exact`, or `bypass`
+- cache status is reported on successful chat-completions responses as `x-cache-status: miss`, `hit-exact`, `hit-semantic`, or `bypass`
 - the memory repository is process-local and non-persistent
 - the Postgres repository persists exact-cache entries in `exact_cache_entries`, stores response JSONB plus safe metadata, and enforces `expires_at` on reads
-- no semantic lookup, embeddings, vector columns, or pgvector runtime path is used
+- Postgres may store semantic metadata and embeddings as JSONB for bounded application-side candidate comparison
+- no pgvector runtime lookup or ANN/vector-index path is used
 
-Milestone 4C adds an embedding foundation outside the chat-completions runtime path:
+Milestone 4C adds an embedding foundation:
 
 - `EMBEDDING_PROVIDER=disabled` is the default, so current request behavior is unchanged
 - `EMBEDDING_PROVIDER=mock` selects a deterministic local provider with configurable dimensions
 - the embedding input builder uses the validated chat request's ordered messages with role and content
 - embedding input excludes request IDs, API keys, tenant hashes, exact cache keys, headers, governance metadata, and provider routing metadata
-- embeddings are not stored in Postgres and are not used for cache lookup yet
-- no semantic thresholding, cosine similarity runtime path, vector columns, or pgvector query is present
+- embeddings are generated in the chat-completions runtime path only when semantic cache is explicitly enabled
+- no live embedding provider, embedding API key, vector columns, or pgvector query is present
+
+Milestone 4D adds a conservative semantic cache after exact cache miss:
+
+- semantic cache is disabled by default and requires `CACHE_ENABLED=true`, `EMBEDDING_PROVIDER=mock`, and `SEMANTIC_CACHE_ENABLED=true`
+- eligibility is limited to safe single-turn requests or a stable system prompt plus one user message
+- prompts with freshness, sensitive-data, attachment, prior-context, legal, medical, or financial indicators are rejected
+- semantic candidates must match tenant hash, model, embedding provider, embedding dimensions, semantic policy version, and system prompt hash
+- cosine similarity is computed in TypeScript over bounded candidate sets and must meet the configured conservative threshold
+- semantic cache read, write, embedding, and candidate-parse failures fail open to the provider path
+- exact cache still runs first; exact hits do not invoke embeddings or semantic lookup
 
 Milestone 2 adds a deterministic execution layer beneath the route:
 
@@ -112,8 +125,8 @@ The real-provider adapter is intentionally non-functional and returns a clear no
 
 ## Worker
 
-The eval worker is a Python package skeleton with a placeholder entrypoint. It does not consume queues, call models, or influence routing in Milestone 4C.
+The eval worker is a Python package skeleton with a placeholder entrypoint. It does not consume queues, call models, or influence routing in Milestone 4D.
 
 ## Data and Events
 
-Redis is used for Milestone 3 governance state: rate-limit counters, daily token counters, and monthly budget counters. Postgres is used only when `CACHE_BACKEND=postgres` for Milestone 4B persistent exact cache storage. Kafka remains a contract/scaffold only; no application code emits Kafka messages yet. pgvector remains future semantic-cache infrastructure and is not used by the runtime gateway.
+Redis is used for Milestone 3 governance state: rate-limit counters, daily token counters, and monthly budget counters. Postgres is used only when `CACHE_BACKEND=postgres` for persistent exact cache storage and optional semantic cache metadata. Kafka remains a contract/scaffold only; no application code emits Kafka messages yet. pgvector remains future vector-search infrastructure and is not used by the runtime gateway.

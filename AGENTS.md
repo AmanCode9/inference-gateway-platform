@@ -23,13 +23,13 @@ Current stack:
 - Keep the code production-oriented, not tutorial-style.
 
 ## Current milestone
-Milestones 1, 2, 3, 3.5, 4A, 4B, and 4C are implemented.
+Milestones 1, 2, 3, 3.5, 4A, 4B, 4C, and 4D are implemented.
 
-The current frozen feature milestone is Milestone 4C: embedding boundary and deterministic mock embeddings.
+The current frozen feature milestone is Milestone 4D: conservative semantic cache.
 Milestone 3.5 is a documentation and CI quality milestone only.
 
-Next planned milestone:
-- Milestone 4D: semantic cache lookup
+Next planned work:
+- final polish and project freeze
 
 Allowed:
 - repo scaffolding
@@ -46,9 +46,11 @@ Allowed:
 - process-local exact chat-completions cache with tenant isolation, canonical exact keys, fail-open behavior, and x-cache-status response headers
 - persistent Postgres-backed exact cache storage with TTL enforcement and no raw API-key storage
 - embedding provider boundary, deterministic mock embeddings, and stable chat-completion embedding input builder
+- conservative semantic cache lookup after exact cache miss, with tenant/model compatibility, strict thresholding, fail-open behavior, and no live embedding provider
 
 Not allowed yet:
-- semantic cache lookup unless explicitly working on Milestone 4D or another semantic-cache lookup milestone
+- live embedding provider integration
+- pgvector/vector-similarity runtime lookup
 - Kafka runtime logic
 - Kubernetes manifests
 - eval-backed routing

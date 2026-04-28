@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createInMemoryCacheRepository } from "../../src/cache/in-memory-repository.js";
 import type { CacheRepository } from "../../src/cache/repository.js";
-import type { CachedChatCompletion } from "../../src/cache/types.js";
+import type { CachedChatCompletion, SemanticCacheCandidate, SemanticCacheQuery } from "../../src/cache/types.js";
+import type { EmbeddingService } from "../../src/embeddings/embedding-service.js";
 import { createInMemoryGovernanceStore } from "../../src/governance/in-memory-store.js";
 import { startTestServer, type TestServer } from "./test-server.js";
 
@@ -269,6 +270,232 @@ describe("POST /v1/chat/completions", () => {
     expect(server.cacheMetrics()).toMatchObject({
       exactHitCount: 1,
       missCount: 1
+    });
+  });
+
+  it("runs exact cache before semantic cache", async () => {
+    const cacheRepository = new RecordingCacheRepository();
+    const embeddingService = new StaticEmbeddingService([[1, 0]]);
+    server = await startTestServer(
+      {
+        CACHE_ENABLED: "true",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository,
+        embeddingService
+      }
+    );
+
+    const requestBody = JSON.stringify({
+      model: "mock-model",
+      messages: [{ role: "user", content: "Explain VLANs simply" }]
+    });
+
+    const firstResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+    const secondResponse = await fetch(server.url("/v1/chat/completions"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-gateway-key"
+      },
+      body: requestBody
+    });
+
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.headers.get("x-cache-status")).toBe("hit-exact");
+    expect(embeddingService.callCount).toBe(1);
+    expect(cacheRepository.semanticReadCount).toBe(1);
+    expect(server.metrics().providerSelected.mock).toBe(1);
+  });
+
+  it("returns a conservative semantic cache hit after exact miss", async () => {
+    const cacheRepository = new RecordingCacheRepository();
+    const embeddingService = new StaticEmbeddingService([
+      [1, 0],
+      [0.999, 0.001]
+    ]);
+    server = await startTestServer(
+      {
+        CACHE_ENABLED: "true",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true",
+        SEMANTIC_CACHE_THRESHOLD: "0.97"
+      },
+      {
+        cacheRepository,
+        embeddingService
+      }
+    );
+
+    const firstResponse = await sendSemanticChat("req_semantic_first", "Explain DNS simply");
+    const secondResponse = await sendSemanticChat("req_semantic_second", "Describe DNS simply");
+    const secondBody = (await secondResponse.json()) as {
+      id?: string;
+      requestId?: string;
+      choices?: Array<{
+        message?: {
+          content?: string;
+        };
+      }>;
+    };
+
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.headers.get("x-cache-status")).toBe("hit-semantic");
+    expect(secondResponse.headers.get("x-request-id")).toBe("req_semantic_second");
+    expect(secondBody.requestId).toBe("req_semantic_second");
+    expect(secondBody.id).not.toContain("req_semantic_first");
+    expect(secondBody.id).not.toContain("req_semantic_second");
+    expect(secondBody.choices?.[0]?.message?.content).toContain("Explain DNS simply");
+    expect(server.metrics().providerSelected.mock).toBe(1);
+    expect(server.cacheMetrics()).toMatchObject({
+      semanticHitCount: 1,
+      semanticMissCount: 1,
+      missCount: 1
+    });
+  });
+
+  it("does not share semantic cache entries across tenants or models", async () => {
+    const cacheRepository = new RecordingCacheRepository();
+
+    server = await startTestServer(
+      {
+        GATEWAY_API_KEY: "tenant-a-key",
+        CACHE_ENABLED: "true",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository,
+        embeddingService: new StaticEmbeddingService([[1, 0]])
+      }
+    );
+
+    const firstResponse = await sendSemanticChat("req_semantic_tenant_a", "Explain DHCP simply", {
+      apiKey: "tenant-a-key"
+    });
+
+    expect(firstResponse.headers.get("x-cache-status")).toBe("miss");
+    await server.close();
+
+    server = await startTestServer(
+      {
+        GATEWAY_API_KEY: "tenant-b-key",
+        CACHE_ENABLED: "true",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository,
+        embeddingService: new StaticEmbeddingService([[1, 0]])
+      }
+    );
+
+    const tenantResponse = await sendSemanticChat("req_semantic_tenant_b", "Describe DHCP simply", {
+      apiKey: "tenant-b-key"
+    });
+
+    expect(tenantResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(server.metrics().providerSelected.mock).toBe(1);
+    await server.close();
+
+    server = await startTestServer(
+      {
+        GATEWAY_API_KEY: "tenant-a-key",
+        CACHE_ENABLED: "true",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository,
+        embeddingService: new StaticEmbeddingService([[1, 0]])
+      }
+    );
+
+    const modelResponse = await sendSemanticChat("req_semantic_model", "Describe DHCP simply", {
+      apiKey: "tenant-a-key",
+      model: "different-model"
+    });
+
+    expect(modelResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(server.metrics().providerSelected.mock).toBe(1);
+  });
+
+  it("fails open when semantic cache is rejected or unavailable", async () => {
+    const rejectedEmbeddingService = new StaticEmbeddingService([[1, 0]]);
+    server = await startTestServer(
+      {
+        CACHE_ENABLED: "true",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true"
+      },
+      {
+        embeddingService: rejectedEmbeddingService
+      }
+    );
+
+    const rejectedResponse = await sendSemanticChat("req_semantic_rejected", "What is the latest weather?");
+
+    expect(rejectedResponse.status).toBe(200);
+    expect(rejectedResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(rejectedEmbeddingService.callCount).toBe(0);
+    expect(server.cacheMetrics().semanticRejectedCount).toBe(1);
+    await server.close();
+
+    server = await startTestServer(
+      {
+        CACHE_ENABLED: "true",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true"
+      },
+      {
+        embeddingService: new FailingEmbeddingService()
+      }
+    );
+
+    const embeddingFailureResponse = await sendSemanticChat("req_semantic_embedding_error", "Explain ARP simply");
+
+    expect(embeddingFailureResponse.status).toBe(200);
+    expect(embeddingFailureResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(server.cacheMetrics().semanticErrorCount).toBe(1);
+    await server.close();
+
+    const failingRepository = new RecordingCacheRepository({
+      failOnSemanticRead: true
+    });
+    server = await startTestServer(
+      {
+        CACHE_ENABLED: "true",
+        EMBEDDING_PROVIDER: "mock",
+        SEMANTIC_CACHE_ENABLED: "true"
+      },
+      {
+        cacheRepository: failingRepository,
+        embeddingService: new StaticEmbeddingService([[1, 0]])
+      }
+    );
+
+    const repositoryFailureResponse = await sendSemanticChat("req_semantic_repo_error", "Explain NAT simply");
+
+    expect(repositoryFailureResponse.status).toBe(200);
+    expect(repositoryFailureResponse.headers.get("x-cache-status")).toBe("miss");
+    expect(failingRepository.semanticReadCount).toBe(1);
+    expect(server.metrics().providerSelected.mock).toBe(1);
+    expect(server.cacheMetrics()).toMatchObject({
+      readErrorCount: 1,
+      semanticErrorCount: 1
     });
   });
 
@@ -1391,16 +1618,77 @@ describe("POST /v1/chat/completions", () => {
   });
 });
 
+async function sendSemanticChat(
+  requestId: string,
+  content: string,
+  options: {
+    readonly apiKey?: string;
+    readonly model?: string;
+  } = {}
+): Promise<Response> {
+  if (!server) {
+    throw new Error("Expected test server to be started.");
+  }
+
+  return await fetch(server.url("/v1/chat/completions"), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": options.apiKey ?? "test-gateway-key",
+      "x-request-id": requestId
+    },
+    body: JSON.stringify({
+      model: options.model ?? "mock-model",
+      messages: [{ role: "user", content }]
+    })
+  });
+}
+
+class StaticEmbeddingService implements EmbeddingService {
+  public callCount = 0;
+  private readonly vectors: readonly (readonly number[])[];
+
+  public constructor(vectors: readonly (readonly number[])[]) {
+    this.vectors = vectors;
+  }
+
+  public async createEmbedding(): Promise<readonly number[]> {
+    const vector = this.vectors[Math.min(this.callCount, this.vectors.length - 1)];
+    this.callCount += 1;
+
+    if (!vector) {
+      throw new Error("No test embedding vector configured.");
+    }
+
+    return vector;
+  }
+}
+
+class FailingEmbeddingService implements EmbeddingService {
+  public async createEmbedding(): Promise<readonly number[]> {
+    throw new Error("Simulated embedding failure.");
+  }
+}
+
 class RecordingCacheRepository implements CacheRepository {
   public readCount = 0;
   public writeCount = 0;
+  public semanticReadCount = 0;
   private readonly failOnRead: boolean;
   private readonly failOnWrite: boolean;
+  private readonly failOnSemanticRead: boolean;
   private readonly entries = new Map<string, CachedChatCompletion>();
 
-  public constructor(options: { readonly failOnRead?: boolean; readonly failOnWrite?: boolean } = {}) {
+  public constructor(
+    options: {
+      readonly failOnRead?: boolean;
+      readonly failOnWrite?: boolean;
+      readonly failOnSemanticRead?: boolean;
+    } = {}
+  ) {
     this.failOnRead = options.failOnRead ?? false;
     this.failOnWrite = options.failOnWrite ?? false;
+    this.failOnSemanticRead = options.failOnSemanticRead ?? false;
   }
 
   public async getExact(cacheKey: string): Promise<CachedChatCompletion | undefined> {
@@ -1421,5 +1709,52 @@ class RecordingCacheRepository implements CacheRepository {
     }
 
     this.entries.set(cacheKey, entry);
+  }
+
+  public async getSemanticCandidates(query: SemanticCacheQuery): Promise<readonly SemanticCacheCandidate[]> {
+    this.semanticReadCount += 1;
+
+    if (this.failOnSemanticRead) {
+      throw new Error("Simulated semantic cache read failure.");
+    }
+
+    const nowMs = Date.now();
+    const candidates: SemanticCacheCandidate[] = [];
+
+    for (const entry of this.entries.values()) {
+      const metadata = entry.semanticMetadata;
+
+      if (!metadata || metadata.expiresAtMs <= nowMs) {
+        continue;
+      }
+
+      if (
+        metadata.tenantHash !== query.tenantHash ||
+        metadata.model !== query.model ||
+        metadata.embeddingProvider !== query.embeddingProvider ||
+        metadata.embeddingDimensions !== query.embeddingDimensions ||
+        metadata.semanticPolicyVersion !== query.semanticPolicyVersion ||
+        metadata.systemPromptHash !== query.systemPromptHash
+      ) {
+        continue;
+      }
+
+      candidates.push({
+        completion: entry.completion,
+        embedding: metadata.embedding,
+        metadata: {
+          tenantHash: metadata.tenantHash,
+          model: metadata.model,
+          embeddingProvider: metadata.embeddingProvider,
+          embeddingDimensions: metadata.embeddingDimensions,
+          semanticPolicyVersion: metadata.semanticPolicyVersion,
+          semanticInputHash: metadata.semanticInputHash,
+          expiresAtMs: metadata.expiresAtMs,
+          ...(metadata.systemPromptHash ? { systemPromptHash: metadata.systemPromptHash } : {})
+        }
+      });
+    }
+
+    return candidates.slice(0, query.maxCandidates);
   }
 }

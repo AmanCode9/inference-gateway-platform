@@ -15,7 +15,7 @@ describe("gateway OpenAPI contract", () => {
     expect(contract).toContain("24 hours");
   });
 
-  it("documents exact cache status response headers", () => {
+  it("documents cache status response headers", () => {
     const contract = readFileSync(
       new URL("../../../../openapi/gateway.openapi.yaml", import.meta.url),
       "utf8"
@@ -23,6 +23,7 @@ describe("gateway OpenAPI contract", () => {
 
     expect(contract).toContain("x-cache-status");
     expect(contract).toContain("hit-exact");
+    expect(contract).toContain("hit-semantic");
     expect(contract).toContain("bypass");
   });
 });

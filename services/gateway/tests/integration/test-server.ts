@@ -6,6 +6,8 @@ import { createConfiguredCacheRepository, type CacheRepositoryHandle } from "../
 import type { CacheRepository } from "../../src/cache/repository.js";
 import { createCacheService } from "../../src/cache/service.js";
 import { loadConfig } from "../../src/config/index.js";
+import { createEmbeddingService, type EmbeddingService } from "../../src/embeddings/embedding-service.js";
+import { createConfiguredEmbeddingProvider } from "../../src/embeddings/factory.js";
 import { createGovernanceService } from "../../src/governance/service.js";
 import { createInMemoryGovernanceStore } from "../../src/governance/in-memory-store.js";
 import type { GovernanceStore } from "../../src/governance/types.js";
@@ -24,6 +26,7 @@ export interface TestServer {
 export interface StartTestServerOptions {
   readonly governanceStore?: GovernanceStore;
   readonly cacheRepository?: CacheRepository;
+  readonly embeddingService?: EmbeddingService;
 }
 
 export async function startTestServer(
@@ -46,10 +49,13 @@ export async function startTestServer(
     store: governanceStore
   });
   const cacheMetrics = createCacheMetrics();
+  const embeddingProvider = createConfiguredEmbeddingProvider(config.embedding);
+  const embeddingService = options.embeddingService ?? (embeddingProvider ? createEmbeddingService(embeddingProvider) : undefined);
   const cacheService = createCacheService({
     config: config.cache,
     metrics: cacheMetrics,
-    repository: cacheRepository
+    repository: cacheRepository,
+    ...(embeddingService ? { embeddingService } : {})
   });
   const metrics = createProviderMetrics();
   const providerRegistry = createProviderRegistry(config.providerRegistry);
