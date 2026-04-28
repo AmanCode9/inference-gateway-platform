@@ -45,6 +45,10 @@ describe("loadConfig", () => {
       backend: "memory",
       ttlSeconds: 86_400
     });
+    expect(config.embedding).toEqual({
+      provider: "disabled",
+      dimensions: 384
+    });
   });
 
   it("rejects an invalid port", () => {
@@ -231,5 +235,41 @@ describe("loadConfig", () => {
         DATABASE_URL: "mysql://localhost:3306/cache"
       })
     ).toThrow("DATABASE_URL must use the postgres:// or postgresql:// scheme.");
+  });
+
+  it("loads embedding configuration", () => {
+    const config = loadConfig({
+      GATEWAY_API_KEY: "test-key",
+      REDIS_URL: "redis://localhost:6379",
+      EMBEDDING_PROVIDER: "mock",
+      EMBEDDING_DIMENSIONS: "768"
+    });
+
+    expect(config.embedding).toEqual({
+      provider: "mock",
+      dimensions: 768
+    });
+  });
+
+  it("rejects unsupported embedding providers", () => {
+    expect(() =>
+      loadConfig({
+        GATEWAY_API_KEY: "test-key",
+        REDIS_URL: "redis://localhost:6379",
+        EMBEDDING_PROVIDER: "openai"
+      })
+    ).toThrow("EMBEDDING_PROVIDER must be one of disabled or mock.");
+  });
+
+  it("rejects invalid embedding dimensions", () => {
+    for (const dimensions of ["0", "-1", "1.5", "NaN"]) {
+      expect(() =>
+        loadConfig({
+          GATEWAY_API_KEY: "test-key",
+          REDIS_URL: "redis://localhost:6379",
+          EMBEDDING_DIMENSIONS: dimensions
+        })
+      ).toThrow("EMBEDDING_DIMENSIONS must be an integer");
+    }
   });
 });

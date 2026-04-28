@@ -23,13 +23,13 @@ Current stack:
 - Keep the code production-oriented, not tutorial-style.
 
 ## Current milestone
-Milestones 1, 2, 3, 3.5, 4A, and 4B are implemented.
+Milestones 1, 2, 3, 3.5, 4A, 4B, and 4C are implemented.
 
-The current frozen feature milestone is Milestone 4B: persistent exact cache storage.
+The current frozen feature milestone is Milestone 4C: embedding boundary and deterministic mock embeddings.
 Milestone 3.5 is a documentation and CI quality milestone only.
 
 Next planned milestone:
-- Milestone 4C: semantic caching foundation
+- Milestone 4D: semantic cache lookup
 
 Allowed:
 - repo scaffolding
@@ -45,9 +45,10 @@ Allowed:
 - Redis-backed governance: per-API-key rate limiting, daily token quota, monthly budget tracking, abuse protection, fail-closed governance behavior, and request-scoped governance idempotency
 - process-local exact chat-completions cache with tenant isolation, canonical exact keys, fail-open behavior, and x-cache-status response headers
 - persistent Postgres-backed exact cache storage with TTL enforcement and no raw API-key storage
+- embedding provider boundary, deterministic mock embeddings, and stable chat-completion embedding input builder
 
 Not allowed yet:
-- semantic caching unless explicitly working on Milestone 4C or another semantic-cache milestone
+- semantic cache lookup unless explicitly working on Milestone 4D or another semantic-cache lookup milestone
 - Kafka runtime logic
 - Kubernetes manifests
 - eval-backed routing

@@ -55,6 +55,14 @@ Milestone 4B - persistent exact cache storage:
 - Postgres TTL enforcement on reads; expired rows behave as misses.
 - Parameterized SQL queries and tenant isolation without storing raw API keys.
 
+Milestone 4C - embedding boundary foundation:
+
+- Embedding provider interface for future semantic-cache work.
+- Deterministic mock embedding provider with fixed dimensions and no external calls.
+- Stable embedding input builder for validated chat-completions requests.
+- Disabled-by-default embedding configuration.
+- No semantic cache lookup, pgvector runtime query, or embedding persistence.
+
 ## Architecture
 
 ```mermaid
@@ -70,9 +78,10 @@ flowchart LR
   ExactCache --> ProviderExecution[Provider Execution Layer<br/>timeout + retry + fallback]
   ProviderExecution --> MockProvider[Mock Provider]
   ProviderExecution --> RealStub[Real Provider Stub<br/>no outbound API calls]
+  Gateway -. foundation only .-> EmbeddingBoundary[Embedding Boundary<br/>deterministic mock embeddings]
   Gateway -. placeholder .-> EvalWorker[Python Eval Worker<br/>future evaluation work]
   Gateway -. future contract only .-> Kafka[(Kafka<br/>future usage events)]
-  Gateway -. future semantic cache only .-> Pgvector[(pgvector<br/>no semantic lookup yet)]
+  EmbeddingBoundary -. future semantic cache only .-> Pgvector[(pgvector<br/>no semantic lookup yet)]
 ```
 
 Current request flow:
@@ -193,6 +202,11 @@ Exact cache:
 - `DATABASE_URL` - required when `CACHE_BACKEND=postgres`.
 - `CACHE_POSTGRES_OPERATION_TIMEOUT_MS` - bounded Postgres cache operation timeout; defaults to `250`.
 
+Embedding foundation:
+
+- `EMBEDDING_PROVIDER` - `disabled` or `mock`; defaults to `disabled`.
+- `EMBEDDING_DIMENSIONS` - deterministic mock embedding dimensions; defaults to `384`.
+
 The real-provider stub adapter does not call external APIs. Selecting `real_stub` validates configuration and returns a documented not-implemented response.
 
 ## Governance Policy
@@ -237,6 +251,15 @@ Usage approximation:
 - The memory backend is process-local and non-persistent.
 - The Postgres backend is persistent exact cache storage. It is not semantic caching and does not use embeddings, pgvector, or similarity search.
 
+## Embedding Foundation Policy
+
+- Embeddings are disabled by default and are not generated in the chat-completions runtime path in Milestone 4C.
+- The embedding boundary is provider-agnostic and async so future real embedding providers can fit behind it.
+- The deterministic mock provider is local-only, hash-based, and makes no network calls.
+- Embedding input is built from the validated chat payload's ordered messages with role and content.
+- Embedding input excludes API keys, tenant data, request IDs, headers, exact cache keys, governance metadata, and provider routing metadata.
+- No semantic cache lookup, similarity threshold, pgvector runtime query, or embedding storage exists yet.
+
 ## Checks and CI
 
 Run the same checks locally that CI runs:
@@ -266,10 +289,11 @@ Implemented:
 - Milestone 3.5: CI, README polish, and architecture diagram.
 - Milestone 4A: process-local exact cache foundation.
 - Milestone 4B: persistent Postgres exact cache storage.
+- Milestone 4C: embedding boundary and deterministic mock embeddings.
 
 Next planned feature milestone:
 
-- Milestone 4C: semantic caching foundation.
+- Milestone 4D: semantic cache lookup.
 
 Future milestones, not implemented yet:
 
@@ -304,4 +328,4 @@ Intentional boundaries:
 - No eval-backed routing.
 - No live external provider calls.
 - No SQL/Postgres governance persistence.
-- No semantic cache, embeddings, pgvector lookup, or similarity search in Milestone 4B.
+- No semantic cache lookup, pgvector runtime query, or similarity search in Milestone 4C.
